@@ -161,13 +161,13 @@ export default class DBService {
         }
     }
 
-    static async cleanupOldAggregations(aggregationWindowMs: number): Promise<void> {
+    static async cleanupOldRecords(windowMs: number): Promise<void> {
         try {
-            const cutoffDate = new Date(Date.now() - 2 * aggregationWindowMs).toISOString();
+            const cutoffDate = new Date(Date.now() - 2 * windowMs).toISOString();
             const result = await WalletAggregationModel.deleteMany({ dateKey: { $lt: cutoffDate } });
-            common.logInfo(`DBService.cleanupOldAggregations: Deleted ${result.deletedCount} old aggregation records`);
+            common.logInfo(`DBService.cleanupOldRecords: Deleted ${result.deletedCount} old aggregation records`);
         } catch (error) {
-            common.logError(`DBService.cleanupOldAggregations: ${error}`);
+            common.logError(`DBService.cleanupOldRecords: ${error}`);
             throw error;
         }
     }

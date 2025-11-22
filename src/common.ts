@@ -25,3 +25,8 @@ export async function retryWithBackoff<T>(operation: () => Promise<T>, retries =
         return retryWithBackoff(operation, retries - 1, delay_ms * 3);
     }
 }
+
+export function isValidCoinSymbol(coin: string): boolean {
+    const regex = /^[A-Z]{3,8}$/;
+    return regex.test(coin);
+}

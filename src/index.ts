@@ -75,6 +75,28 @@ function registerHandlers(): void {
         }
         void tradeService.stop();
     });
+
+    bot.command('stats', async (ctx) => {
+        if (!(await checkMessageSource(ctx))) {
+            return;
+        }
+        const args = ctx.args;
+        if (args.length !== 1) {
+            await ctx.reply('Usage: /stats <coin>');
+            return;
+        }
+        const coin = args[0].toUpperCase();
+        if (!common.isValidCoinSymbol(coin)) {
+            await ctx.reply(`Invalid coin symbol: '${coin}'`);
+            return;
+        }
+        const [msg, ok] = await tradeService.getCoinStats(coin);
+        if (!ok) {
+            await ctx.reply(msg);
+            return;
+        }
+        await ctx.reply(msg, { parse_mode: 'HTML' });
+    });
 }
 
 async function main(): Promise<void> {

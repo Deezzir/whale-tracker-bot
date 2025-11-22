@@ -18,6 +18,37 @@ export interface WsTrade {
 
 type PortfolioHistoryPoint = [number, string];
 
+interface PerpsMeta {
+    universe: {
+        name: string;
+        szDecimals: number;
+        maxLeverage: number;
+        onlyIsolated?: boolean;
+    }[];
+    assetMeta: {
+        dayNtlVlm: string;
+        funding: string;
+        impactPxs: number[];
+        markPx: string;
+        midPx: string;
+        openInterest: string;
+        oraclePx: string;
+        premium: string;
+        prevDayPx: string;
+    }[];
+}
+
+interface SpotMeta {
+    tokens: { name: string; szDecimals: number; weiDecimals: number; index: number }[];
+    universe: { name: string; tokens: number[]; index: number; isCanonical: boolean }[];
+    assetMeta: {
+        dayNtlVlm: string;
+        markPx: string;
+        midPx: string;
+        prevDayPx: string;
+    }[];
+}
+
 interface LeverageInfo {
     type?: string;
     value?: number;
@@ -65,6 +96,8 @@ interface AlertContext {
 export default class TradeService {
     private bot: Telegraf;
     private redis = getRedisClient();
+    private perpStatsKey = 'trade:perpStats';
+    private spotStatsKey = 'trade:spotStats';
     private portfolioCacheKey = 'trade:portfolioCache';
     private clearinghouseCacheKey = 'trade:clearinghouseCache';
     private monitoring = false;
@@ -270,7 +303,7 @@ export default class TradeService {
         }
         this.monitoring = false;
         await this.monitorTask?.catch((error) =>
-            common.logError(`TradeService.stopMonitoring: error while awaiting monitor task: ${error}`)
+            common.logError(`TradeService.stop: error while awaiting monitor task: ${error}`)
         );
         this.monitorTask = undefined;
         common.logInfo('TradeService monitoring stopped');
@@ -287,7 +320,7 @@ export default class TradeService {
                 try {
                     await this.scanAndAlert();
                 } catch (error) {
-                    common.logError(`TradeService.monitorLoop: ${error}`);
+                    common.logError(`TradeService.mainLoop: ${error}`);
                 }
                 if (!this.monitoring) break;
                 await this.cancellableSleep(config.monitor.intervalMs);
@@ -297,9 +330,9 @@ export default class TradeService {
         const cleanupLoop = async () => {
             while (this.monitoring) {
                 try {
-                    await DBService.cleanupOldAggregations(config.monitor.aggregationWindowMs);
+                    await DBService.cleanupOldRecords(config.monitor.aggregationWindowMs);
                 } catch (error) {
-                    common.logError(`TradeService.monitorLoop cleanup: ${error}`);
+                    common.logError(`TradeService.mainLoop cleanup: ${error}`);
                 }
                 if (!this.monitoring) break;
                 await this.cancellableSleep(config.monitor.cleanupIntervalMs);
@@ -461,5 +494,143 @@ export default class TradeService {
         };
 
         return ws;
+    }
+
+    private async getPerpStats(): Promise<PerpsMeta | null> {
+        // const cachedPerps = await this.redis.get(this.perpStatsKey);
+        // if (cachedPerps) return JSON.parse(cachedPerps);
+
+        try {
+            const operation = () =>
+                axios.post(
+                    'https://api.hyperliquid.xyz/info',
+                    { type: 'metaAndAssetCtxs' },
+                    { headers: { 'Content-Type': 'application/json' } }
+                );
+            const response = await common.retryWithBackoff(operation);
+            const data = response.data;
+
+            const meta: PerpsMeta = {
+                universe: data[0].universe,
+                assetMeta: data[1]
+            };
+            await this.redis.setEx(this.perpStatsKey, config.monitor.cacheTtlMs / 1000, JSON.stringify(meta));
+            return meta;
+        } catch (error) {
+            common.logError(`Failed to fetch perp stats: ${error}`);
+            return null;
+        }
+    }
+
+    private async getSpotStats(): Promise<SpotMeta | null> {
+        // const cachedSpot = await this.redis.get(this.spotStatsKey);
+        // if (cachedSpot) return JSON.parse(cachedSpot);
+
+        try {
+            const operation = () =>
+                axios.post(
+                    'https://api.hyperliquid.xyz/info',
+                    { type: 'spotMetaAndAssetCtxs' },
+                    { headers: { 'Content-Type': 'application/json' } }
+                );
+            const response = await common.retryWithBackoff(operation);
+            const data = response.data;
+
+            const meta: SpotMeta = {
+                tokens: data[0].tokens,
+                universe: data[0].universe,
+                assetMeta: data[1]
+            };
+            await this.redis.setEx(this.spotStatsKey, config.monitor.cacheTtlMs / 1000, JSON.stringify(meta));
+            return meta;
+        } catch (error) {
+            common.logError(`Failed to fetch spot stats: ${error}`);
+            return null;
+        }
+    }
+
+    async getCoinStats(coin: string): Promise<[string, boolean]> {
+        try {
+            const perpsStats = await this.getPerpStats();
+            const spotStats = await this.getSpotStats();
+
+            if (!perpsStats || !spotStats) {
+                return ['Failed to fetch market statistics. Please try again later.', false];
+            }
+
+            const lines: string[] = [`📊 <b>Market Stats:</b> <code>$${this.escapeHtml(coin)}</code>`, ''];
+
+            const perpIndex = perpsStats.universe.findIndex((u) => u.name === coin);
+            if (perpIndex !== -1) {
+                const perpMetaItem = perpsStats.universe[perpIndex];
+                const perpCtx = perpsStats.assetMeta[perpIndex];
+
+                lines.push('🔷 <b>Perpetuals</b>');
+                lines.push('');
+
+                lines.push(`<b>Max Leverage:</b> <code>${perpMetaItem.maxLeverage}x</code>`);
+                if (perpMetaItem.onlyIsolated) lines.push(`<b>Mode:</b> <code>Isolated Only</code>`);
+
+                if (perpCtx) {
+                    lines.push(`Mark Price: <code>$${perpCtx.markPx}</code>`);
+                    lines.push(`Mid Price: <code>$${perpCtx.midPx}</code>`);
+                    lines.push(`Oracle Price: <code>$${perpCtx.oraclePx}</code>`);
+                    lines.push('');
+                    lines.push(`24h Volume: <code>${this.formatCurrency(parseFloat(perpCtx.dayNtlVlm))}</code>`);
+                    lines.push(`Open Interest: <code>${parseFloat(perpCtx.openInterest).toFixed(2)}</code>`);
+                    lines.push(`Funding Rate: <code>${(parseFloat(perpCtx.funding) * 100).toFixed(4)}%</code>`);
+                    lines.push(`Premium: <code>${(parseFloat(perpCtx.premium) * 100).toFixed(4)}%</code>`);
+
+                    const priceChange =
+                        ((parseFloat(perpCtx.markPx) - parseFloat(perpCtx.prevDayPx)) / parseFloat(perpCtx.prevDayPx)) *
+                        100;
+                    const changeIcon = priceChange >= 0 ? '📈' : '📉';
+                    lines.push(`<b>24h Change:</b> <code>${priceChange.toFixed(2)}%</code> ${changeIcon}`);
+                }
+                lines.push('');
+            }
+
+            let spotPair: { name: string; tokens: number[]; index: number; isCanonical: boolean } | undefined;
+            const coinToken = spotStats.tokens.find((t) => t.name === coin);
+            if (coinToken) spotPair = spotStats.universe.find((u) => u.tokens[0] === coinToken.index);
+
+            if (spotPair) {
+                const baseTokenIndex = spotPair.tokens[0];
+                const quoteTokenIndex = spotPair.tokens[1];
+                const baseToken = spotStats.tokens[baseTokenIndex];
+                const quoteToken = spotStats.tokens[quoteTokenIndex];
+                const spotCtx = spotStats.assetMeta[spotPair.index];
+
+                lines.push('🔶 <b>Spot</b>');
+                lines.push('');
+
+                if (baseToken) {
+                    lines.push(`<b>Base Token:</b> <code>${this.escapeHtml(baseToken.name)}</code>`);
+                }
+                if (quoteToken) {
+                    lines.push(`<b>Quote Token:</b> <code>${this.escapeHtml(quoteToken.name)}</code>`);
+                }
+                lines.push(`<b>Canonical:</b> <code>${spotPair.isCanonical ? 'Yes' : 'No'}</code>`);
+
+                if (spotCtx) {
+                    lines.push('');
+                    lines.push(`Mark Price: <code>$${spotCtx.markPx}</code>`);
+                    lines.push(`Mid Price: <code>$${spotCtx.midPx}</code>`);
+                    lines.push('');
+                    lines.push(`24h Volume: <code>${this.formatCurrency(parseFloat(spotCtx.dayNtlVlm))}</code>`);
+
+                    const priceChange =
+                        ((parseFloat(spotCtx.markPx) - parseFloat(spotCtx.prevDayPx)) / parseFloat(spotCtx.prevDayPx)) *
+                        100;
+                    const changeIcon = priceChange >= 0 ? '📈' : '📉';
+                    lines.push(`<b>24h Change:</b> <code>${priceChange.toFixed(2)}%</code> ${changeIcon}`);
+                }
+            }
+
+            return [lines.join('\n'), true];
+        } catch (error) {
+            common.logError(`getCoinStats error: ${error}`);
+            return ['An error occurred while fetching coin stats. Please try again later.', false];
+        }
     }
 }
