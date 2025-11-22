@@ -226,14 +226,7 @@ export default class TradeService {
         }
 
         const direction: TradeDirection = trade.side === 'B' ? 'long' : 'short';
-        await DBService.recordTrade(
-            buyer,
-            coin,
-            notional,
-            trade.time,
-            direction,
-            config.monitoring.aggregationWindowMs
-        );
+        await DBService.recordTrade(buyer, coin, notional, trade.time, direction, config.monitor.aggregationWindowMs);
     }
 
     private async fetchCoins(): Promise<string[]> {
@@ -249,7 +242,7 @@ export default class TradeService {
         return this.monitoring;
     }
 
-    async startMonitoring(): Promise<void> {
+    async start(): Promise<void> {
         if (this.monitoring) {
             return;
         }
@@ -268,10 +261,10 @@ export default class TradeService {
             await common.sleep(50);
         }
 
-        this.monitorTask = this.monitorLoop();
+        this.monitorTask = this.mainLoop();
     }
 
-    async stopMonitoring(): Promise<void> {
+    async stop(): Promise<void> {
         if (!this.monitoring) {
             return;
         }
@@ -288,24 +281,38 @@ export default class TradeService {
         this.wss.clear();
     }
 
-    private async monitorLoop(): Promise<void> {
-        while (this.monitoring) {
-            try {
-                await this.scanAndAlert();
-            } catch (error) {
-                common.logError(`TradeService.monitorLoop: ${error}`);
+    private async mainLoop(): Promise<void> {
+        const scanLoop = async () => {
+            while (this.monitoring) {
+                try {
+                    await this.scanAndAlert();
+                } catch (error) {
+                    common.logError(`TradeService.monitorLoop: ${error}`);
+                }
+                if (!this.monitoring) break;
+                await this.cancellableSleep(config.monitor.intervalMs);
             }
-            if (!this.monitoring) {
-                break;
+        };
+
+        const cleanupLoop = async () => {
+            while (this.monitoring) {
+                try {
+                    await DBService.cleanupOldAggregations(config.monitor.aggregationWindowMs);
+                } catch (error) {
+                    common.logError(`TradeService.monitorLoop cleanup: ${error}`);
+                }
+                if (!this.monitoring) break;
+                await this.cancellableSleep(config.monitor.cleanupIntervalMs);
             }
-            await common.sleep(config.monitor.intervalMs);
-        }
+        };
+
+        await Promise.all([scanLoop(), cleanupLoop()]);
     }
 
     private async scanAndAlert(): Promise<void> {
         const candidates = await DBService.findAggregationsNeedingAlert(
-            config.monitoring.minSuspiciousNotionalUSD,
-            config.monitoring.aggregationWindowMs
+            config.monitor.minSuspiciousNotionalUSD,
+            config.monitor.aggregationWindowMs
         );
 
         common.logInfo(`TradeService.scanAndAlert: Found ${candidates.length} candidates needing alert`);
@@ -318,6 +325,22 @@ export default class TradeService {
                 );
             }
         }
+    }
+
+    private async cancellableSleep(ms: number): Promise<void> {
+        const checkInterval = 1000;
+        const iterations = Math.floor(ms / checkInterval);
+        const remainder = ms % checkInterval;
+
+        for (let i = 0; i < iterations; i++) {
+            if (!this.monitoring) {
+                common.logInfo('TradeService.cancellableSleep: sleep interrupted by stop request.');
+                return;
+            }
+            await common.sleep(checkInterval);
+        }
+
+        if (remainder > 0 && this.monitoring) await common.sleep(remainder);
     }
 
     private async processAggregateCandidate(candidate: AggregationRecord): Promise<void> {
@@ -346,7 +369,7 @@ export default class TradeService {
         const alertContext: AlertContext = {
             aggregateTotalNotional: candidate.totalNotional,
             aggregateTradeCount: candidate.tradeCount,
-            aggregationWindowMs: config.monitoring.aggregationWindowMs,
+            aggregationWindowMs: config.monitor.aggregationWindowMs,
             positionState: positionState,
             lastTradeTime: candidate.lastTradeTime,
             state: state
@@ -354,11 +377,35 @@ export default class TradeService {
 
         const message = this.formatAlertMessage(candidate.coin, candidate.wallet, alertContext);
         if (!message) return;
-        await this.bot.telegram.sendMessage(config.telegram.targetGroupID, message, {
-            parse_mode: 'HTML'
-        });
+        if (config.monitor.mainCoins.includes(candidate.coin))
+            await this.bot.telegram.sendMessage(config.telegram.targetGroupID, message, {
+                parse_mode: 'HTML',
+                message_thread_id: config.telegram.targetMainTopicID
+            });
+        else
+            await this.bot.telegram.sendMessage(config.telegram.targetGroupID, message, {
+                parse_mode: 'HTML',
+                message_thread_id: config.telegram.targetOtherTopicID
+            });
 
         await DBService.markAlerted(candidate.wallet, candidate.coin, candidate.dateKey, candidate.direction);
+    }
+
+    private reconnectWebSocket(name: string): void {
+        const interval = this.pingIntervals.get(name);
+        if (interval) {
+            clearInterval(interval);
+            this.pingIntervals.delete(name);
+        }
+        this.wss.delete(name);
+        if (this.monitoring) {
+            setTimeout(() => {
+                if (this.monitoring) {
+                    const newWs = this.subscribeToCoinTrades(name);
+                    this.wss.set(name, newWs);
+                }
+            }, 5000);
+        }
     }
 
     private subscribeToCoinTrades(name: string): WebSocket {
@@ -402,25 +449,15 @@ export default class TradeService {
 
         ws.onerror = (error) => {
             common.logError(`WebSocket error in coin ${name}: ${error}`);
+            if (ws.readyState !== WebSocket.OPEN) {
+                this.reconnectWebSocket(name);
+            }
         };
 
         ws.onclose = (event) => {
             const reason = event.reason || 'unknown';
             common.logInfo(`WebSocket closed for coin ${name}, reason: ${reason}`);
-            const interval = this.pingIntervals.get(name);
-            if (interval) {
-                clearInterval(interval);
-                this.pingIntervals.delete(name);
-            }
-            this.wss.delete(name);
-            if (this.monitoring) {
-                setTimeout(() => {
-                    if (this.monitoring) {
-                        const newWs = this.subscribeToCoinTrades(name);
-                        this.wss.set(name, newWs);
-                    }
-                }, 5000);
-            }
+            this.reconnectWebSocket(name);
         };
 
         return ws;

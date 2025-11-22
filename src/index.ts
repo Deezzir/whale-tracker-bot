@@ -56,7 +56,7 @@ function registerHandlers(): void {
         }
         common.logInfo(`Starting monitoring.`);
         if (ctx) await ctx.reply('Monitoring started.');
-        void tradeService.startMonitoring();
+        void tradeService.start();
     });
 
     bot.command('stop', async (ctx) => {
@@ -73,7 +73,7 @@ function registerHandlers(): void {
         if (ctx) {
             void ctx.reply('Monitoring stopped.');
         }
-        void tradeService.stopMonitoring();
+        void tradeService.stop();
     });
 }
 
@@ -87,13 +87,13 @@ async function main(): Promise<void> {
         bot.stop('SIGINT');
         void closeDB();
         void closeRedis();
-        void tradeService.stopMonitoring();
+        void tradeService.stop();
     });
     process.once('SIGTERM', () => {
         bot.stop('SIGTERM');
         void closeDB();
         void closeRedis();
-        void tradeService.stopMonitoring();
+        void tradeService.stop();
     });
 }
 
