@@ -30,3 +30,8 @@ export function isValidCoinSymbol(coin: string): boolean {
     const regex = /^[A-Z]{3,8}$/;
     return regex.test(coin);
 }
+
+export function isValidHyperliquidAddress(wallet: string): boolean {
+    const regex = /^0x[0-9a-f]{40}$/i;
+    return regex.test(wallet);
+}

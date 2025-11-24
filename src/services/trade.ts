@@ -1,9 +1,10 @@
 import axios from 'axios';
 import { config } from '../config';
 import * as common from '../common';
-import DBService, { AggregationRecord, TradeDirection } from './db.js';
-import { Telegraf } from 'telegraf';
+import DBService, { AggregationRecord, TradeDirection, TrackedWallet } from './db.js';
+import { Markup, Telegraf } from 'telegraf';
 import { getRedisClient } from './redis';
+import { InlineKeyboardMarkup } from 'telegraf/types';
 
 export interface WsTrade {
     coin: string;
@@ -85,6 +86,7 @@ interface PortfolioStats {
 type PortfolioResponse = Array<[string, PortfolioStats]>;
 
 interface AlertContext {
+    id: string;
     aggregateTotalNotional?: number;
     aggregateTradeCount?: number;
     aggregationWindowMs?: number;
@@ -109,176 +111,12 @@ export default class TradeService {
         this.bot = bot;
     }
 
-    private async fetchPortfolio(user: string): Promise<PortfolioResponse | null> {
-        const cached = await this.redis.get(`${this.portfolioCacheKey}:${user}`);
-        if (cached) return JSON.parse(cached);
-
-        try {
-            const operation = () =>
-                axios.post(
-                    'https://api.hyperliquid.xyz/info',
-                    { type: 'portfolio', user },
-                    { headers: { 'Content-Type': 'application/json' } }
-                );
-            const response = await common.retryWithBackoff(operation);
-            const data = response.data as PortfolioResponse;
-            await this.redis.setEx(
-                `${this.portfolioCacheKey}:${user}`,
-                config.monitor.cacheTtlMs / 1000,
-                JSON.stringify(data)
-            );
-            return data;
-        } catch (error) {
-            common.logError(`Failed to fetch portfolio for ${user}: ${error}`);
-            return null;
-        }
-    }
-
-    private async fetchTraderStats(user: string): Promise<TraderState | null> {
-        const cached = await this.redis.get(`${this.clearinghouseCacheKey}:${user}`);
-        if (cached) return JSON.parse(cached);
-
-        try {
-            const response = await axios.post(
-                'https://api.hyperliquid.xyz/info',
-                { type: 'clearinghouseState', user },
-                { headers: { 'Content-Type': 'application/json' } }
-            );
-            const data = response.data as TraderState;
-            await this.redis.setEx(
-                `${this.clearinghouseCacheKey}:${user}`,
-                config.monitor.cacheTtlMs / 1000,
-                JSON.stringify(data)
-            );
-            return data;
-        } catch (error) {
-            common.logError(`Failed to fetch clearinghouse state for ${user}: ${error}`);
-            return null;
-        }
-    }
-
-    private formatCurrency(value: number): string {
-        const abs = Math.abs(value).toLocaleString('en-US', {
-            minimumFractionDigits: 2,
-            maximumFractionDigits: 2
-        });
-        const prefix = value < 0 ? '-' : '';
-        return `${prefix}$${abs}`;
-    }
-
-    private extractPositionDetails(pos: Position): {
-        direction: TradeDirection;
-        rank: number;
-        pnl: number;
-        entryPrice: string;
-    } {
-        const szi: number = parseFloat(pos.szi || '0');
-        const direction: TradeDirection = szi > 0 ? 'long' : 'short';
-        const rank: number = pos.leverage?.value ? parseFloat(pos.leverage.value.toString()) : 1;
-        const pnl: number = pos.unrealizedPnl ? parseFloat(pos.unrealizedPnl) : 0;
-        const entryPrice: string = pos.entryPx || 'N/A';
-        return { direction, rank, pnl, entryPrice };
-    }
-
-    private formatAlertMessage(coin: string, buyer: string, context: AlertContext): string | null {
-        if (
-            !context.positionState.position ||
-            !context.state.marginSummary ||
-            !context.state.marginSummary.accountValue
-        )
-            return null;
-        const { direction, rank, pnl, entryPrice } = this.extractPositionDetails(context.positionState.position);
-
-        const accountValue = parseFloat(context.state.marginSummary.accountValue || '0');
-        const coinsTraded = context.state.assetPositions ? context.state.assetPositions.length : 0;
-        const posTrades = context.aggregateTradeCount ?? 1;
-        const directionIcon = direction === 'long' ? '🟢' : '🔴';
-        const directionLabel = direction === 'long' ? 'Long' : 'Short';
-        const positionSize = context.aggregateTotalNotional ?? 0;
-
-        const lines = [
-            `🐋 <b>NEW WHALE ALERT</b> 🐋`,
-            '',
-            `${directionIcon} <b>Coin:</b> <code>${this.escapeHtml(coin)}</code> (${directionLabel})`,
-            '',
-            `<b>Leverage:</b> <code>${rank.toFixed(2)}x</code>`,
-            `<b>Entry Price:</b> <code>${this.escapeHtml(entryPrice)}</code>`,
-            `<b>Position Size:</b> <code>${this.formatCurrency(positionSize)}</code>`,
-            `<b>Unrealized PnL:</b> <code>${this.formatCurrency(pnl)}</code>`,
-            `<b>Total Trades:</b> ${posTrades}`,
-            '',
-            `<b>Trader Profile</b>`,
-            `Address: <code>${this.escapeHtml(buyer)}</code>`,
-            `Account Value: <code>${this.formatCurrency(accountValue)}</code>`,
-            `Coins Traded: ${coinsTraded}`,
-            '',
-            `<a href="https://hypurrscan.io/address/${encodeURIComponent(buyer)}">View on Hypurrscan</a>`
-        ];
-        return lines.join('\n');
-    }
-
-    private escapeHtml(input: string): string {
-        return input
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#39;');
-    }
-
-    private isFreshWallet(portfolio: PortfolioResponse): boolean {
-        const buckets = portfolio.filter(([label]) => label === 'perpAllTime' || label === 'allTime');
-        if (buckets.length === 0) {
-            return true;
-        }
-
-        const now = Date.now();
-        const bucketIsFresh = (stats?: PortfolioStats): boolean => {
-            if (!stats) {
-                return true;
-            }
-            const history = stats.accountValueHistory ?? [];
-            if (history.length === 0 || history.length <= 2) {
-                return true;
-            }
-            const firstTimestamp = history[0][0];
-            return now - firstTimestamp <= config.monitor.freshWindowMs;
-        };
-
-        return buckets.some(([, stats]) => bucketIsFresh(stats));
-    }
-
-    async handleTrade(trade: WsTrade, coin: string): Promise<void> {
-        const notional = parseFloat(trade.px) * parseFloat(trade.sz);
-        if (!Number.isFinite(notional)) {
-            return;
-        }
-        const buyer = trade.users[0];
-        if (!buyer) {
-            return;
-        }
-
-        const direction: TradeDirection = trade.side === 'B' ? 'long' : 'short';
-        await DBService.recordTrade(buyer, coin, notional, trade.time, direction, config.monitor.aggregationWindowMs);
-    }
-
-    private async fetchCoins(): Promise<string[]> {
-        const response = await axios.post(
-            'https://api.hyperliquid.xyz/info',
-            { type: 'meta' },
-            { headers: { 'Content-Type': 'application/json' } }
-        );
-        return response.data.universe.map((u: { name: string }) => u.name);
-    }
-
     isActive(): boolean {
         return this.monitoring;
     }
 
     async start(): Promise<void> {
-        if (this.monitoring) {
-            return;
-        }
+        if (this.monitoring) return;
         this.monitoring = true;
         common.logInfo('TradeService monitoring started');
 
@@ -298,9 +136,7 @@ export default class TradeService {
     }
 
     async stop(): Promise<void> {
-        if (!this.monitoring) {
-            return;
-        }
+        if (!this.monitoring) return;
         this.monitoring = false;
         await this.monitorTask?.catch((error) =>
             common.logError(`TradeService.stop: error while awaiting monitor task: ${error}`)
@@ -314,13 +150,141 @@ export default class TradeService {
         this.wss.clear();
     }
 
+    async track(wallet: string, coin: string, direction: TradeDirection): Promise<string> {
+        try {
+            const found = await DBService.isWalletTracked(wallet, coin, direction);
+            if (found)
+                return `Wallet <code>${this.escapeHtml(wallet)}</code> is already being tracked for ${coin.toUpperCase()} ${direction.toUpperCase()}.`;
+
+            const state = await this.fetchTraderStats(wallet);
+            if (!state) {
+                common.logInfo(`Unable to fetch state for a wallet ${wallet}`);
+                return 'Failed to fetch trader state. Please ensure the wallet address is correct.';
+            }
+
+            const currentPosition = state.assetPositions?.find((pos) => pos.position?.coin === coin);
+            if (!currentPosition || !currentPosition.position)
+                return `No open position found for wallet <code>${this.escapeHtml(wallet)}</code> on coin <code>$${coin.toUpperCase()}</code>.`;
+
+            const currentSzi = parseFloat(currentPosition.position.szi || '0');
+            const currentDirection: TradeDirection = currentSzi > 0 ? 'long' : 'short';
+            if (currentDirection !== direction)
+                return (
+                    `The current position direction for wallet <code>${this.escapeHtml(wallet)}</code> on coin <code>$${coin.toUpperCase()}</code> is <b>${currentDirection.toUpperCase()}</b>` +
+                    `which does not match the requested tracking direction <b>${direction.toUpperCase()}</b>.`
+                );
+            const currentNotional = Math.abs(currentSzi) * parseFloat(currentPosition.position.entryPx || '0');
+
+            await DBService.addUpdateTrackedWallet(wallet, coin, direction, currentNotional);
+            return `Added wallet <code>${this.escapeHtml(wallet)}</code> for tracking (${coin.toUpperCase()} ${direction.toUpperCase()}).`;
+        } catch (error) {
+            common.logError(`TradeService.track error: ${error}`);
+            return 'An error occurred while adding the tracked wallet. Please try again later.';
+        }
+    }
+
+    async trackById(id: string): Promise<{ msg: string; buttons: InlineKeyboardMarkup | null }> {
+        try {
+            const trade = await DBService.getTradeById(id);
+            if (!trade) return { msg: 'Trade not found.', buttons: null };
+            const updated_buttons: InlineKeyboardMarkup = {
+                inline_keyboard: [
+                    [
+                        {
+                            text: '🔗 View on Hypurrscan',
+                            url: `https://hypurrscan.io/address/${encodeURIComponent(trade.wallet)}`
+                        }
+                    ]
+                ]
+            };
+
+            const found = await DBService.isWalletTracked(trade.wallet, trade.coin, trade.direction);
+            if (found)
+                return {
+                    msg: `Wallet <code>${this.escapeHtml(trade.wallet)}</code> is already being tracked for ${trade.coin.toUpperCase()} ${trade.direction.toUpperCase()}.`,
+                    buttons: updated_buttons
+                };
+            await DBService.addUpdateTrackedWallet(trade.wallet, trade.coin, trade.direction, trade.totalNotional);
+            return {
+                msg: `Added wallet <code>${this.escapeHtml(trade.wallet)}</code> for tracking (${trade.coin.toUpperCase()} ${trade.direction.toUpperCase()}).`,
+                buttons: updated_buttons
+            };
+        } catch (error) {
+            common.logError(`TradeService.track error: ${error}`);
+            return { msg: 'An error occurred while adding the tracked wallet. Please try again later.', buttons: null };
+        }
+    }
+
+    async untrack(wallet: string, coin: string, direction: TradeDirection): Promise<string> {
+        try {
+            const deleted = await DBService.removeTrackedWallet(wallet, coin, direction);
+            if (deleted) return `Removed wallet <code>${this.escapeHtml(deleted.wallet)}</code> from tracking.`;
+            else return `Wallet <code>${this.escapeHtml(wallet)}</code> with such order was not found in tracked list.`;
+        } catch (error) {
+            common.logError(`TradeService.untrack error: ${error}`);
+            return 'An error occurred while removing the tracked wallet. Please try again later.';
+        }
+    }
+
+    async untrackById(id: string): Promise<{ msg: string; buttons: InlineKeyboardMarkup | null }> {
+        try {
+            const deleted = await DBService.removeTrackedWalletById(id);
+            if (deleted) {
+                const updated_buttons: InlineKeyboardMarkup = {
+                    inline_keyboard: [
+                        [
+                            {
+                                text: '🔗 View on Hypurrscan',
+                                url: `https://hypurrscan.io/address/${encodeURIComponent(deleted.wallet)}`
+                            }
+                        ]
+                    ]
+                };
+                return {
+                    msg: `Removed wallet <code>${this.escapeHtml(deleted.wallet)}</code> from tracking.`,
+                    buttons: updated_buttons
+                };
+            }
+            return { msg: `Wallet with such order was not found in tracked list.`, buttons: null };
+        } catch (error) {
+            common.logError(`TradeService.untrack error: ${error}`);
+            return {
+                msg: 'An error occurred while removing the tracked wallet. Please try again later.',
+                buttons: null
+            };
+        }
+    }
+
+    async listTracked(): Promise<string> {
+        try {
+            const trackedWallets = await DBService.getTrackedWallets();
+            if (trackedWallets.length === 0) {
+                return 'No wallets are currently being tracked.';
+            }
+            const lines = ['📋 <b>Tracked Wallets:</b>', ''];
+            for (const tracked of trackedWallets) {
+                const compressedWallet = `${tracked.wallet.slice(0, 6)}...${tracked.wallet.slice(-4)}`;
+                const directionIcon = tracked.direction === 'long' ? '🟢' : '🔴';
+                const href = `https://hypurrscan.io/address/${encodeURIComponent(tracked.wallet)}`;
+                lines.push(`<b>Wallet</b> <a href="${href}">${this.escapeHtml(compressedWallet)}</a>`);
+                lines.push(`<b>Coin:</b> ${directionIcon} <code>${tracked.coin.toUpperCase()}</code>`);
+                lines.push(`<b>Size:</b> <code>$${tracked.totalNotional.toLocaleString()}</code>`);
+                lines.push('');
+            }
+            return lines.join('\n');
+        } catch (error) {
+            common.logError(`TradeService.listTracked error: ${error}`);
+            return 'An error occurred while listing tracked wallets. Please try again later.';
+        }
+    }
+
     private async mainLoop(): Promise<void> {
         const scanLoop = async () => {
             while (this.monitoring) {
                 try {
                     await this.scanAndAlert();
                 } catch (error) {
-                    common.logError(`TradeService.mainLoop: ${error}`);
+                    common.logError(`TradeService.mainLoop alerting: ${error}`);
                 }
                 if (!this.monitoring) break;
                 await this.cancellableSleep(config.monitor.intervalMs);
@@ -330,7 +294,7 @@ export default class TradeService {
         const cleanupLoop = async () => {
             while (this.monitoring) {
                 try {
-                    await DBService.cleanupOldRecords(config.monitor.aggregationWindowMs);
+                    await DBService.cleanTrades(config.monitor.aggregationWindowMs);
                 } catch (error) {
                     common.logError(`TradeService.mainLoop cleanup: ${error}`);
                 }
@@ -339,11 +303,23 @@ export default class TradeService {
             }
         };
 
-        await Promise.all([scanLoop(), cleanupLoop()]);
+        const trackLoop = async () => {
+            while (this.monitoring) {
+                try {
+                    await this.trackAndAlert();
+                } catch (error) {
+                    common.logError(`TradeService.mainLoop cleanup: ${error}`);
+                }
+                if (!this.monitoring) break;
+                await this.cancellableSleep(config.monitor.trackCheckIntervalMs);
+            }
+        };
+
+        await Promise.all([scanLoop(), cleanupLoop(), trackLoop()]);
     }
 
     private async scanAndAlert(): Promise<void> {
-        const candidates = await DBService.findAggregationsNeedingAlert(
+        const candidates = await DBService.getTradesToAlert(
             config.monitor.minSuspiciousNotionalUSD,
             config.monitor.aggregationWindowMs
         );
@@ -351,10 +327,25 @@ export default class TradeService {
         common.logInfo(`TradeService.scanAndAlert: Found ${candidates.length} candidates needing alert`);
         for (const candidate of candidates) {
             try {
-                await this.processAggregateCandidate(candidate);
+                await this.processAlertCandidate(candidate);
             } catch (error) {
                 common.logError(
                     `TradeService.scanAndAlert: Failed to alert wallet ${candidate.wallet} / ${candidate.coin} / ${candidate.direction}: ${error}`
+                );
+            }
+        }
+    }
+
+    private async trackAndAlert(): Promise<void> {
+        const trackedWallets = await DBService.getExpiredTrackedWallets();
+        common.logInfo(`TradeService.trackAndAlert: Found ${trackedWallets.length} tracked wallets to check`);
+
+        for (const tracked of trackedWallets) {
+            try {
+                await this.processTrackedWallet(tracked);
+            } catch (error) {
+                common.logError(
+                    `TradeService.trackAndAlert: Failed to check tracked wallet ${tracked.wallet} / ${tracked.coin} / ${tracked.direction}: ${error}`
                 );
             }
         }
@@ -376,30 +367,102 @@ export default class TradeService {
         if (remainder > 0 && this.monitoring) await common.sleep(remainder);
     }
 
-    private async processAggregateCandidate(candidate: AggregationRecord): Promise<void> {
+    private async processTrackedWallet(tracked: TrackedWallet): Promise<void> {
+        const state = await this.fetchTraderStats(tracked.wallet);
+        if (!state) {
+            common.logInfo(`Unable to fetch state for tracked wallet ${tracked.wallet}`);
+            return;
+        }
+
+        const currentPosition = state.assetPositions?.find((pos) => pos.position?.coin === tracked.coin);
+
+        if (!currentPosition || !currentPosition.position) {
+            await this.sendPositionChangedMessage(
+                tracked.id,
+                tracked.wallet,
+                tracked.coin,
+                tracked.direction,
+                'closed'
+            );
+            await DBService.removeTrackedWalletById(tracked.id);
+            return;
+        }
+
+        const currentSzi = parseFloat(currentPosition.position.szi || '0');
+        const currentDirection: TradeDirection = currentSzi > 0 ? 'long' : 'short';
+
+        if (currentDirection !== tracked.direction) {
+            await this.sendPositionChangedMessage(
+                tracked.id,
+                tracked.wallet,
+                tracked.coin,
+                tracked.direction,
+                'direction'
+            );
+            await DBService.removeTrackedWalletById(tracked.id);
+            return;
+        }
+
+        const currentNotional = Math.abs(currentSzi) * parseFloat(currentPosition.position.entryPx || '0');
+        const increaseThreshold = tracked.totalNotional * (1 + config.monitor.posChangeAlertPercent / 100);
+        const decreaseThreshold = tracked.totalNotional * (1 - config.monitor.posChangeAlertPercent / 100);
+        if (currentNotional > increaseThreshold || currentNotional < decreaseThreshold) {
+            await this.sendPositionChangedMessage(tracked.id, tracked.wallet, tracked.coin, tracked.direction, 'size', {
+                previousNotional: tracked.totalNotional,
+                currentNotional,
+                currentPosition
+            });
+            await DBService.addUpdateTrackedWallet(
+                tracked.wallet,
+                tracked.coin,
+                tracked.direction,
+                currentNotional,
+                config.monitor.trackCheckIntervalMs
+            );
+        } else {
+            await DBService.addUpdateTrackedWallet(
+                tracked.wallet,
+                tracked.coin,
+                tracked.direction,
+                tracked.totalNotional,
+                config.monitor.trackCheckIntervalMs
+            );
+        }
+    }
+
+    private async processAlertCandidate(candidate: AggregationRecord): Promise<void> {
         const portfolio = await this.fetchPortfolio(candidate.wallet);
         if (!portfolio) return;
         if (!this.isFreshWallet(portfolio)) {
             common.logInfo(`Skipping alert for wallet ${candidate.wallet} as it is not fresh`);
-            await DBService.markAlerted(candidate.wallet, candidate.coin, candidate.dateKey, candidate.direction);
+            await DBService.markTradeAlerted(candidate.wallet, candidate.coin, candidate.dateKey, candidate.direction);
+            return;
+        }
+
+        const state = await this.fetchTraderStats(candidate.wallet);
+        if (!state) return;
+        const positionState = state.assetPositions?.find((pos) => pos.position?.coin === candidate.coin);
+        if (!positionState || !positionState.position) {
+            common.logInfo(
+                `No position found for wallet ${candidate.wallet} on coin ${candidate.coin}, marking alert done`
+            );
+            await DBService.markTradeAlerted(candidate.wallet, candidate.coin, candidate.dateKey, candidate.direction);
+            return;
+        }
+        const direction: TradeDirection = parseFloat(positionState.position.szi) > 0 ? 'long' : 'short';
+        if (direction !== candidate.direction) {
+            common.logInfo(
+                `Position direction mismatch for wallet ${candidate.wallet} on coin ${candidate.coin}, marking alert done`
+            );
+            await DBService.markTradeAlerted(candidate.wallet, candidate.coin, candidate.dateKey, candidate.direction);
             return;
         }
 
         common.logInfo(
-            `Alerting on wallet ${candidate.wallet} for coin ${candidate.coin} with notional ${candidate.totalNotional}`
+            `Alerting on wallet ${candidate.wallet} for coin ${candidate.coin} with size ${candidate.totalNotional}`
         );
-        const state = await this.fetchTraderStats(candidate.wallet);
-        if (!state) return;
-        const positionState = state.assetPositions?.find((pos) => pos.position?.coin === candidate.coin);
-        if (!positionState) {
-            common.logInfo(
-                `No position found for wallet ${candidate.wallet} on coin ${candidate.coin}, marking alert done`
-            );
-            await DBService.markAlerted(candidate.wallet, candidate.coin, candidate.dateKey, candidate.direction);
-            return;
-        }
-
         const alertContext: AlertContext = {
+            id: candidate.id,
             aggregateTotalNotional: candidate.totalNotional,
             aggregateTradeCount: candidate.tradeCount,
             aggregationWindowMs: config.monitor.aggregationWindowMs,
@@ -408,20 +471,23 @@ export default class TradeService {
             state: state
         };
 
-        const message = this.formatAlertMessage(candidate.coin, candidate.wallet, alertContext);
-        if (!message) return;
+        const result = this.formatAlertMessage(candidate.coin, candidate.wallet, alertContext);
+        if (!result) return;
+        const { msg, buttons } = result;
         if (config.monitor.mainCoins.includes(candidate.coin))
-            await this.bot.telegram.sendMessage(config.telegram.targetGroupID, message, {
+            await this.bot.telegram.sendMessage(config.telegram.targetGroupID, msg, {
                 parse_mode: 'HTML',
-                message_thread_id: config.telegram.targetMainTopicID
+                message_thread_id: config.telegram.targetMainTopicID,
+                reply_markup: buttons
             });
         else
-            await this.bot.telegram.sendMessage(config.telegram.targetGroupID, message, {
+            await this.bot.telegram.sendMessage(config.telegram.targetGroupID, msg, {
                 parse_mode: 'HTML',
-                message_thread_id: config.telegram.targetOtherTopicID
+                message_thread_id: config.telegram.targetOtherTopicID,
+                reply_markup: buttons
             });
 
-        await DBService.markAlerted(candidate.wallet, candidate.coin, candidate.dateKey, candidate.direction);
+        await DBService.markTradeAlerted(candidate.wallet, candidate.coin, candidate.dateKey, candidate.direction);
     }
 
     private reconnectWebSocket(name: string): void {
@@ -497,8 +563,8 @@ export default class TradeService {
     }
 
     private async getPerpStats(): Promise<PerpsMeta | null> {
-        // const cachedPerps = await this.redis.get(this.perpStatsKey);
-        // if (cachedPerps) return JSON.parse(cachedPerps);
+        const cachedPerps = await this.redis.get(this.perpStatsKey);
+        if (cachedPerps) return JSON.parse(cachedPerps);
 
         try {
             const operation = () =>
@@ -523,8 +589,8 @@ export default class TradeService {
     }
 
     private async getSpotStats(): Promise<SpotMeta | null> {
-        // const cachedSpot = await this.redis.get(this.spotStatsKey);
-        // if (cachedSpot) return JSON.parse(cachedSpot);
+        const cachedSpot = await this.redis.get(this.spotStatsKey);
+        if (cachedSpot) return JSON.parse(cachedSpot);
 
         try {
             const operation = () =>
@@ -549,13 +615,13 @@ export default class TradeService {
         }
     }
 
-    async getCoinStats(coin: string): Promise<[string, boolean]> {
+    async getCoinStats(coin: string): Promise<string> {
         try {
             const perpsStats = await this.getPerpStats();
             const spotStats = await this.getSpotStats();
 
             if (!perpsStats || !spotStats) {
-                return ['Failed to fetch market statistics. Please try again later.', false];
+                return 'Failed to fetch market statistics. Please try again later.';
             }
 
             const lines: string[] = [`📊 <b>Market Stats:</b> <code>$${this.escapeHtml(coin)}</code>`, ''];
@@ -627,10 +693,308 @@ export default class TradeService {
                 }
             }
 
-            return [lines.join('\n'), true];
+            return lines.join('\n');
         } catch (error) {
             common.logError(`getCoinStats error: ${error}`);
-            return ['An error occurred while fetching coin stats. Please try again later.', false];
+            return 'An error occurred while fetching coin stats. Please try again later.';
+        }
+    }
+
+    private async fetchPortfolio(user: string): Promise<PortfolioResponse | null> {
+        const cached = await this.redis.get(`${this.portfolioCacheKey}:${user}`);
+        if (cached) return JSON.parse(cached);
+
+        try {
+            const operation = () =>
+                axios.post(
+                    'https://api.hyperliquid.xyz/info',
+                    { type: 'portfolio', user },
+                    { headers: { 'Content-Type': 'application/json' } }
+                );
+            const response = await common.retryWithBackoff(operation);
+            const data = response.data as PortfolioResponse;
+            await this.redis.setEx(
+                `${this.portfolioCacheKey}:${user}`,
+                config.monitor.cacheTtlMs / 1000,
+                JSON.stringify(data)
+            );
+            return data;
+        } catch (error) {
+            common.logError(`Failed to fetch portfolio for ${user}: ${error}`);
+            return null;
+        }
+    }
+
+    private async fetchTraderStats(user: string): Promise<TraderState | null> {
+        const cached = await this.redis.get(`${this.clearinghouseCacheKey}:${user}`);
+        if (cached) return JSON.parse(cached);
+
+        try {
+            const response = await axios.post(
+                'https://api.hyperliquid.xyz/info',
+                { type: 'clearinghouseState', user },
+                { headers: { 'Content-Type': 'application/json' } }
+            );
+            const data = response.data as TraderState;
+            await this.redis.setEx(
+                `${this.clearinghouseCacheKey}:${user}`,
+                config.monitor.cacheTtlMs / 1000,
+                JSON.stringify(data)
+            );
+            return data;
+        } catch (error) {
+            common.logError(`Failed to fetch clearinghouse state for ${user}: ${error}`);
+            return null;
+        }
+    }
+
+    private formatCurrency(value: number): string {
+        const abs = Math.abs(value).toLocaleString('en-US', {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+        });
+        const prefix = value < 0 ? '-' : '';
+        return `${prefix}$${abs}`;
+    }
+
+    private extractPositionDetails(pos: Position): {
+        direction: TradeDirection;
+        rank: number;
+        pnl: number;
+        entryPrice: string;
+    } {
+        const szi: number = parseFloat(pos.szi || '0');
+        const direction: TradeDirection = szi > 0 ? 'long' : 'short';
+        const rank: number = pos.leverage?.value ? parseFloat(pos.leverage.value.toString()) : 1;
+        const pnl: number = pos.unrealizedPnl ? parseFloat(pos.unrealizedPnl) : 0;
+        const entryPrice: string = pos.entryPx || 'N/A';
+        return { direction, rank, pnl, entryPrice };
+    }
+
+    private formatAlertMessage(
+        coin: string,
+        buyer: string,
+        context: AlertContext
+    ): {
+        msg: string;
+        buttons: InlineKeyboardMarkup;
+    } | null {
+        if (
+            !context.positionState.position ||
+            !context.state.marginSummary ||
+            !context.state.marginSummary.accountValue
+        )
+            return null;
+        const { direction, rank, pnl, entryPrice } = this.extractPositionDetails(context.positionState.position);
+
+        const accountValue = parseFloat(context.state.marginSummary.accountValue || '0');
+        const coinsTraded = context.state.assetPositions ? context.state.assetPositions.length : 0;
+        const posTrades = context.aggregateTradeCount ?? 1;
+        const directionIcon = direction === 'long' ? '🟢' : '🔴';
+        const directionLabel = direction === 'long' ? 'Long' : 'Short';
+        const positionSize = context.aggregateTotalNotional ?? 0;
+
+        const lines = [
+            `🐋 <b>NEW WHALE ALERT</b> 🐋`,
+            '',
+            `${directionIcon} <b>Coin:</b> <code>${this.escapeHtml(coin)}</code> (${directionLabel})`,
+            '',
+            `<b>Leverage:</b> <code>${rank.toFixed(2)}x</code>`,
+            `<b>Entry Price:</b> <code>${this.escapeHtml(entryPrice)}</code>`,
+            `<b>Position Size:</b> <code>${this.formatCurrency(positionSize)}</code>`,
+            `<b>Unrealized PnL:</b> <code>${this.formatCurrency(pnl)}</code>`,
+            `<b>Total Trades:</b> ${posTrades}`,
+            '',
+            `<b>Trader Profile</b>`,
+            `Wallet: <code>${this.escapeHtml(buyer)}</code>`,
+            `Account Value: <code>${this.formatCurrency(accountValue)}</code>`,
+            `Coins Traded: ${coinsTraded}`
+        ];
+        return {
+            msg: lines.join('\n'),
+            buttons: {
+                inline_keyboard: [
+                    [
+                        {
+                            text: '🔗 View on Hypurrscan',
+                            url: `https://hypurrscan.io/address/${encodeURIComponent(buyer)}`
+                        }
+                    ],
+                    [Markup.button.callback('📌 Track Wallet', `track:${context.id}`, true)]
+                ]
+            }
+        };
+    }
+
+    private escapeHtml(input: string): string {
+        return input
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    private isFreshWallet(portfolio: PortfolioResponse): boolean {
+        const buckets = portfolio.filter(([label]) => label === 'perpAllTime' || label === 'allTime');
+        if (buckets.length === 0) {
+            return true;
+        }
+
+        const now = Date.now();
+        const bucketIsFresh = (stats?: PortfolioStats): boolean => {
+            if (!stats) {
+                return true;
+            }
+            const history = stats.accountValueHistory ?? [];
+            if (history.length === 0 || history.length <= 2) {
+                return true;
+            }
+            const firstTimestamp = history[0][0];
+            return now - firstTimestamp <= config.monitor.freshWindowMs;
+        };
+
+        return buckets.some(([, stats]) => bucketIsFresh(stats));
+    }
+
+    async handleTrade(trade: WsTrade, coin: string): Promise<void> {
+        const notional = parseFloat(trade.px) * parseFloat(trade.sz);
+        if (!Number.isFinite(notional)) {
+            return;
+        }
+        const buyer = trade.users[0];
+        if (!buyer) {
+            return;
+        }
+
+        const direction: TradeDirection = trade.side === 'B' ? 'long' : 'short';
+        await DBService.addTrade(buyer, coin, notional, trade.time, direction, config.monitor.aggregationWindowMs);
+    }
+
+    private async fetchCoins(): Promise<string[]> {
+        const response = await axios.post(
+            'https://api.hyperliquid.xyz/info',
+            { type: 'meta' },
+            { headers: { 'Content-Type': 'application/json' } }
+        );
+        return response.data.universe.map((u: { name: string }) => u.name);
+    }
+
+    private async sendPositionChangedMessage(
+        id: string,
+        wallet: string,
+        coin: string,
+        direction: TradeDirection,
+        reason: 'closed' | 'liquidated' | 'direction' | 'size',
+        extra?: {
+            previousNotional?: number;
+            currentNotional?: number;
+            currentPosition?: AssetPosition;
+        }
+    ): Promise<void> {
+        const directionIcon = direction === 'long' ? '🟢' : '🔴';
+        const directionLabel = direction === 'long' ? 'Long' : 'Short';
+
+        let reasonIcon: string;
+        let reasonLabel: string;
+        const lines: string[] = [];
+
+        switch (reason) {
+            case 'closed':
+                reasonIcon = '✅';
+                reasonLabel = 'Position Closed';
+                lines.push(
+                    `${reasonIcon} <b>${reasonLabel}</b>`,
+                    '',
+                    `${directionIcon} <b>Coin:</b> <code>${this.escapeHtml(coin)}</code> (${directionLabel})`,
+                    '',
+                    `Wallet: <code>${this.escapeHtml(wallet)}</code>`
+                );
+                break;
+
+            case 'liquidated':
+                reasonIcon = '⚠️';
+                reasonLabel = 'Position Liquidated';
+                lines.push(
+                    `${reasonIcon} <b>${reasonLabel}</b>`,
+                    '',
+                    `${directionIcon} <b>Coin:</b> <code>${this.escapeHtml(coin)}</code> (${directionLabel})`,
+                    '',
+                    `Wallet: <code>${this.escapeHtml(wallet)}</code>`
+                );
+                break;
+
+            case 'direction':
+                reasonIcon = '🔄';
+                reasonLabel = 'Position Direction Changed';
+                lines.push(
+                    `${reasonIcon} <b>${reasonLabel}</b>`,
+                    '',
+                    `${directionIcon} <b>Coin:</b> <code>${this.escapeHtml(coin)}</code> (${directionLabel})`,
+                    '',
+                    `Wallet: <code>${this.escapeHtml(wallet)}</code>`
+                );
+                break;
+
+            case 'size':
+                if (!extra?.currentPosition?.position || !extra.previousNotional || !extra.currentNotional) {
+                    common.logError('sendPositionChangedMessage: Missing required data for increased position');
+                    return;
+                }
+
+                const { rank, pnl, entryPrice } = this.extractPositionDetails(extra.currentPosition.position);
+                const changePercent = (extra.currentNotional / extra.previousNotional) * 100 - 100;
+
+                reasonIcon = '📈';
+                reasonLabel = 'Position Size Changed';
+                lines.push(
+                    `${reasonIcon} <b>${reasonLabel}</b>`,
+                    '',
+                    `${directionIcon} <b>Coin:</b> <code>${this.escapeHtml(coin)}</code> (${directionLabel})`,
+                    '',
+                    `<b>Previous Size:</b> <code>${this.formatCurrency(extra.previousNotional)}</code>`,
+                    `<b>Current Size:</b> <code>${this.formatCurrency(extra.currentNotional)}</code>`,
+                    `<b>Change:</b> <code>${changePercent.toFixed(2)}%</code>`,
+                    '',
+                    `<b>Leverage:</b> <code>${rank.toFixed(2)}x</code>`,
+                    `<b>Entry Price:</b> <code>${this.escapeHtml(entryPrice)}</code>`,
+                    `<b>Unrealized PnL:</b> <code>${this.formatCurrency(pnl)}</code>`,
+                    '',
+                    `Wallet: <code>${this.escapeHtml(wallet)}</code>`
+                );
+                break;
+        }
+
+        const buttons: InlineKeyboardMarkup = {
+            inline_keyboard: [
+                [
+                    {
+                        text: '🔗 View on Hypurrscan',
+                        url: `https://hypurrscan.io/address/${encodeURIComponent(wallet)}`
+                    }
+                ],
+                reason !== 'closed' && reason !== 'liquidated'
+                    ? [Markup.button.callback('🗑️ Untrack Wallet', `untrack:${id}`, true)]
+                    : []
+            ]
+        };
+
+        try {
+            if (config.monitor.mainCoins.includes(coin)) {
+                await this.bot.telegram.sendMessage(config.telegram.targetGroupID, lines.join('\n'), {
+                    parse_mode: 'HTML',
+                    message_thread_id: config.telegram.targetTrackTopicID,
+                    reply_markup: buttons
+                });
+            } else {
+                await this.bot.telegram.sendMessage(config.telegram.targetGroupID, lines.join('\n'), {
+                    parse_mode: 'HTML',
+                    message_thread_id: config.telegram.targetTrackTopicID,
+                    reply_markup: buttons
+                });
+            }
+        } catch (error) {
+            common.logError(`Failed to send position changed message: ${error}`);
         }
     }
 }
