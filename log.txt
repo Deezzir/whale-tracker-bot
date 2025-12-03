@@ -1,0 +1,285 @@
+
+> hyper-bot@1.0.0 start
+> npm run compile && node ./dist/index.js
+
+
+> hyper-bot@1.0.0 compile
+> tsc
+
+[INFO] MongoDB Connected: localhost:27017
+[INFO] Connected to Redis
+[INFO] Auto-starting monitoring services.
+[INFO] Auto-starting service: TradeService
+[INFO] TradeService monitoring started
+[INFO] Auto-starting service: StakeService
+[INFO] StakeServivce monitoring started
+[INFO] Bot started
+[INFO] WebSocket connected for coin: BTC
+[INFO] WebSocket connected for coin: ETH
+[INFO] WebSocket connected for coin: ATOM
+[INFO] WebSocket connected for coin: MATIC
+[INFO] WebSocket connected for coin: DYDX
+[INFO] WebSocket connected for coin: SOL
+[INFO] WebSocket connected for coin: AVAX
+[INFO] WebSocket connected for coin: BNB
+[INFO] WebSocket connected for coin: APE
+[INFO] WebSocket connected for coin: OP
+[INFO] WebSocket connected for coin: LTC
+[INFO] WebSocket connected for coin: DOGE
+[INFO] WebSocket connected for coin: ARB
+[INFO] WebSocket connected for coin: INJ
+[INFO] WebSocket connected for coin: SUI
+[INFO] WebSocket connected for coin: kPEPE
+[INFO] WebSocket connected for coin: CRV
+[INFO] WebSocket connected for coin: LDO
+[INFO] WebSocket connected for coin: LINK
+[INFO] WebSocket connected for coin: STX
+[INFO] WebSocket connected for coin: RNDR
+[INFO] WebSocket connected for coin: CFX
+[INFO] WebSocket connected for coin: FTM
+[INFO] WebSocket connected for coin: GMX
+[INFO] WebSocket connected for coin: SNX
+[INFO] WebSocket connected for coin: XRP
+[INFO] WebSocket connected for coin: BCH
+[INFO] WebSocket connected for coin: APT
+[INFO] WebSocket connected for coin: AAVE
+[INFO] WebSocket connected for coin: COMP
+[INFO] WebSocket connected for coin: MKR
+[INFO] WebSocket connected for coin: WLD
+[INFO] WebSocket connected for coin: FXS
+[INFO] WebSocket connected for coin: HPOS
+[INFO] WebSocket connected for coin: RLB
+[INFO] WebSocket connected for coin: UNIBOT
+[INFO] WebSocket connected for coin: YGG
+[INFO] WebSocket connected for coin: TRX
+[INFO] WebSocket connected for coin: kSHIB
+[INFO] TradeService.flushTradeBatch: Flushing trade batch of size 1004
+[INFO] WebSocket connected for coin: UNI
+[INFO] WebSocket connected for coin: SEI
+[INFO] WebSocket connected for coin: RUNE
+[INFO] TradeService.flushTradeBatch: Flushing trade batch of size 90
+[INFO] WebSocket connected for coin: OX
+[INFO] WebSocket connected for coin: FRIEND
+[INFO] WebSocket connected for coin: SHIA
+[INFO] WebSocket connected for coin: CYBER
+[INFO] WebSocket connected for coin: ZRO
+[INFO] WebSocket connected for coin: BLZ
+[INFO] WebSocket connected for coin: DOT
+[INFO] StakeService Puppeteer initialized
+[INFO] WebSocket connected for coin: BANANA
+[INFO] WebSocket connected for coin: TRB
+[INFO] StakeService.scanAndAlert: Found 0 candidates needing alert
+[INFO] DBService.cleanBets: Deleted 381 old records
+[INFO] WebSocket connected for coin: FTT
+[INFO] WebSocket connected for coin: LOOM
+[INFO] WebSocket connected for coin: OGN
+[INFO] WebSocket connected for coin: RDNT
+[INFO] WebSocket connected for coin: ARK
+[INFO] WebSocket connected for coin: BNT
+[INFO] WebSocket connected for coin: CANTO
+[INFO] StakeService: Stake WebSocket (AllSportBets) connected
+[INFO] WebSocket connected for coin: REQ
+[INFO] WebSocket connected for coin: BIGTIME
+[INFO] StakeService: Stake WebSocket (AllSportBets) connection acknowledged
+[INFO] WebSocket connected for coin: KAS
+[INFO] WebSocket connected for coin: ORBS
+[INFO] WebSocket connected for coin: BLUR
+[INFO] WebSocket connected for coin: TIA
+[INFO] WebSocket connected for coin: BSV
+[INFO] WebSocket connected for coin: ADA
+[INFO] WebSocket connected for coin: TON
+[INFO] StakeService: Stake WebSocket (HighrollerSportBets) connected
+[INFO] WebSocket connected for coin: MINA
+[INFO] StakeService: Stake WebSocket (HighrollerSportBets) connection acknowledged
+[INFO] WebSocket connected for coin: POLYX
+[INFO] WebSocket connected for coin: GAS
+[INFO] WebSocket connected for coin: PENDLE
+[INFO] WebSocket connected for coin: STG
+[INFO] WebSocket connected for coin: FET
+[INFO] WebSocket connected for coin: STRAX
+[INFO] WebSocket connected for coin: NEAR
+[INFO] WebSocket connected for coin: MEME
+[INFO] TradeService.flushTradeBatch: Flushing trade batch of size 1011
+[INFO] WebSocket connected for coin: ORDI
+[INFO] WebSocket connected for coin: BADGER
+[INFO] WebSocket connected for coin: NEO
+[INFO] TradeService.flushTradeBatch: Flushing trade batch of size 58
+[INFO] TradeService.flushTradeBatch: Flushing trade batch of size 30
+[INFO] WebSocket connected for coin: ZEN
+[INFO] WebSocket connected for coin: FIL
+[INFO] WebSocket connected for coin: SUSHI
+[INFO] WebSocket connected for coin: PYTH
+[INFO] WebSocket connected for coin: ILV
+[INFO] WebSocket connected for coin: IMX
+[INFO] WebSocket connected for coin: kBONK
+[INFO] WebSocket connected for coin: GMT
+[INFO] WebSocket connected for coin: SUPER
+[INFO] WebSocket connected for coin: USTC
+[INFO] WebSocket connected for coin: NFTI
+[INFO] WebSocket connected for coin: JUP
+[INFO] WebSocket connected for coin: kLUNC
+[INFO] WebSocket connected for coin: RSR
+[INFO] WebSocket connected for coin: GALA
+[INFO] WebSocket connected for coin: JTO
+[INFO] WebSocket connected for coin: NTRN
+[INFO] WebSocket connected for coin: ACE
+[INFO] WebSocket connected for coin: MAV
+[INFO] WebSocket connected for coin: WIF
+[INFO] WebSocket connected for coin: CAKE
+[INFO] WebSocket connected for coin: PEOPLE
+[INFO] WebSocket connected for coin: ENS
+[INFO] WebSocket connected for coin: ETC
+[INFO] WebSocket connected for coin: XAI
+[INFO] WebSocket connected for coin: MANTA
+[INFO] WebSocket connected for coin: UMA
+[INFO] WebSocket connected for coin: ONDO
+[INFO] WebSocket connected for coin: ALT
+[INFO] WebSocket connected for coin: ZETA
+[INFO] WebSocket connected for coin: DYM
+[INFO] WebSocket connected for coin: MAVIA
+[INFO] WebSocket connected for coin: PANDORA
+[INFO] WebSocket connected for coin: W
+[INFO] WebSocket connected for coin: STRK
+[INFO] TradeService.flushTradeBatch: Flushing trade batch of size 1008
+[INFO] WebSocket connected for coin: AI
+[INFO] TradeService.flushTradeBatch: Flushing trade batch of size 31
+[INFO] WebSocket connected for coin: PIXEL
+[INFO] WebSocket connected for coin: TAO
+[INFO] WebSocket connected for coin: AR
+[INFO] WebSocket connected for coin: MYRO
+[INFO] WebSocket connected for coin: kFLOKI
+[INFO] WebSocket connected for coin: BOME
+[INFO] WebSocket connected for coin: ETHFI
+[INFO] WebSocket connected for coin: ENA
+[INFO] WebSocket connected for coin: MNT
+[INFO] WebSocket connected for coin: TNSR
+[INFO] WebSocket connected for coin: SAGA
+[INFO] WebSocket connected for coin: MERL
+[INFO] WebSocket connected for coin: HBAR
+[INFO] WebSocket connected for coin: POPCAT
+[INFO] WebSocket connected for coin: OMNI
+[INFO] WebSocket connected for coin: EIGEN
+[INFO] WebSocket connected for coin: REZ
+[INFO] WebSocket connected for coin: NOT
+[INFO] WebSocket connected for coin: TURBO
+[INFO] WebSocket connected for coin: BRETT
+[INFO] WebSocket connected for coin: IO
+[INFO] WebSocket connected for coin: ZK
+[INFO] WebSocket connected for coin: BLAST
+[INFO] WebSocket connected for coin: LISTA
+[INFO] WebSocket connected for coin: MEW
+[INFO] WebSocket connected for coin: RENDER
+[INFO] WebSocket connected for coin: kDOGS
+[INFO] WebSocket connected for coin: POL
+[INFO] WebSocket connected for coin: CATI
+[INFO] WebSocket connected for coin: CELO
+[INFO] WebSocket connected for coin: HMSTR
+[INFO] WebSocket connected for coin: SCR
+[INFO] WebSocket connected for coin: NEIROETH
+[INFO] TradeService.flushTradeBatch: Flushing trade batch of size 1005
+[INFO] WebSocket connected for coin: GOAT
+[INFO] WebSocket connected for coin: kNEIRO
+[INFO] WebSocket connected for coin: MOODENG
+[INFO] TradeService.flushTradeBatch: Flushing trade batch of size 27
+[INFO] WebSocket connected for coin: GRASS
+[INFO] TradeService.flushTradeBatch: Flushing trade batch of size 1
+[INFO] WebSocket connected for coin: PURR
+[INFO] WebSocket connected for coin: PNUT
+[INFO] WebSocket connected for coin: XLM
+[INFO] WebSocket connected for coin: CHILLGUY
+[INFO] WebSocket connected for coin: SAND
+[INFO] WebSocket connected for coin: IOTA
+[INFO] WebSocket connected for coin: ALGO
+[INFO] WebSocket connected for coin: ME
+[INFO] WebSocket connected for coin: MOVE
+[INFO] WebSocket connected for coin: VIRTUAL
+[INFO] WebSocket connected for coin: PENGU
+[INFO] WebSocket connected for coin: HYPE
+[INFO] WebSocket connected for coin: USUAL
+[INFO] WebSocket connected for coin: FARTCOIN
+[INFO] WebSocket connected for coin: AI16Z
+[INFO] WebSocket connected for coin: AIXBT
+[INFO] WebSocket connected for coin: ZEREBRO
+[INFO] WebSocket connected for coin: BIO
+[INFO] WebSocket connected for coin: GRIFFAIN
+[INFO] WebSocket connected for coin: SPX
+[INFO] WebSocket connected for coin: S
+[INFO] WebSocket connected for coin: MORPHO
+[INFO] WebSocket connected for coin: TRUMP
+[INFO] WebSocket connected for coin: MELANIA
+[INFO] WebSocket connected for coin: VINE
+[INFO] WebSocket connected for coin: VVV
+[INFO] WebSocket connected for coin: JELLY
+[INFO] WebSocket connected for coin: BERA
+[INFO] WebSocket connected for coin: TST
+[INFO] WebSocket connected for coin: LAYER
+[INFO] WebSocket connected for coin: IP
+[INFO] WebSocket connected for coin: OM
+[INFO] WebSocket connected for coin: ANIME
+[INFO] WebSocket connected for coin: KAITO
+[INFO] TradeService.flushTradeBatch: Flushing trade batch of size 1014
+[INFO] WebSocket connected for coin: NIL
+[INFO] TradeService.flushTradeBatch: Flushing trade batch of size 90
+[INFO] WebSocket connected for coin: PAXG
+[INFO] WebSocket connected for coin: PROMPT
+[INFO] TradeService.flushTradeBatch: Flushing trade batch of size 30
+[INFO] WebSocket connected for coin: BABY
+[INFO] WebSocket connected for coin: WCT
+[INFO] WebSocket connected for coin: HYPER
+[INFO] WebSocket connected for coin: ZORA
+[INFO] WebSocket connected for coin: INIT
+[INFO] WebSocket connected for coin: DOOD
+[INFO] WebSocket connected for coin: LAUNCHCOIN
+[INFO] WebSocket connected for coin: NXPC
+[INFO] WebSocket connected for coin: SOPH
+[INFO] WebSocket connected for coin: RESOLV
+[INFO] WebSocket connected for coin: SYRUP
+[INFO] WebSocket connected for coin: PUMP
+[INFO] WebSocket connected for coin: PROVE
+[INFO] WebSocket connected for coin: YZY
+[INFO] WebSocket connected for coin: XPL
+[INFO] WebSocket connected for coin: WLFI
+[INFO] WebSocket connected for coin: LINEA
+[INFO] WebSocket connected for coin: SKY
+[INFO] WebSocket connected for coin: ASTER
+[INFO] WebSocket connected for coin: AVNT
+[INFO] WebSocket connected for coin: 0G
+[INFO] WebSocket connected for coin: STBL
+[INFO] WebSocket connected for coin: HEMI
+[INFO] WebSocket connected for coin: APEX
+[INFO] WebSocket connected for coin: 2Z
+[INFO] WebSocket connected for coin: ZEC
+[INFO] TradeService.trackAndAlert: Found 0 tracked wallets to check
+[INFO] WebSocket connected for coin: MON
+[INFO] WebSocket connected for coin: MET
+[INFO] WebSocket connected for coin: MEGA
+[INFO] WebSocket connected for coin: CC
+[INFO] DBService.cleanTrades: Deleted 0 old records
+[INFO] TradeService.scanAndAlert: Found 3 candidates needing alert
+[INFO] TradeService: Detected high-value trade: 0x010461c14e146ac35fe42271bdc1134ee31c703a NEAR $100,405.94 (short)
+[INFO] WebSocket connected for coin: ICP
+[INFO] WebSocket connected for coin: AERO
+[INFO] TradeService.flushTradeBatch: Flushing trade batch of size 1001
+[INFO] TradeService.flushTradeBatch: Flushing trade batch of size 30
+[INFO] TradeService: Skipping alert for high-value trade (not fresh wallet): 0x010461c14e146ac35fe42271bdc1134ee31c703a NEAR $100,405.94 (short)
+[INFO] TradeService: Detected high-value trade: 0xf9109ada2f73c62e9889b45453065f0d99260a2d BCH $103,925.58 (short)
+[INFO] TradeService: Skipping alert for high-value trade (not fresh wallet): 0xf9109ada2f73c62e9889b45453065f0d99260a2d BCH $103,925.58 (short)
+[INFO] TradeService: Detected high-value trade: 0xa3371d8b79f0d7e000c79755413ae345990cf4d3 HYPE $102,014.29 (long)
+[INFO] TradeService: Skipping alert for high-value trade (not fresh wallet): 0xa3371d8b79f0d7e000c79755413ae345990cf4d3 HYPE $102,014.29 (long)
+[INFO] StakeService: Detected high-value bet: IID sport:482658421 $10,002.00 (HighrollerSportBets)
+[INFO] StakeService.flushBetsBatch: Flushing bets batch of size 25
+[INFO] StakeService: Detected high-value bet: IID sport:482658480 $5,470.09 (HighrollerSportBets)
+[INFO] StakeService: Detected high-value bet: IID sport:482658504 $1,000.20 (HighrollerSportBets)
+[INFO] StakeService.flushBetsBatch: Flushing bets batch of size 21
+[INFO] StakeService.scanAndAlert: Found 0 candidates needing alert
+[INFO] StakeService: Detected high-value bet: IID sport:482658576 $1,000.20 (AllSportBets)
+[INFO] StakeService: Detected high-value bet: IID sport:482658576 $1,000.20 (HighrollerSportBets)
+[INFO] TradeService.scanAndAlert: Found 0 candidates needing alert
+[INFO] StakeService.flushBetsBatch: Flushing bets batch of size 24
+[INFO] StakeService: Detected high-value bet: IID sport:482658710 $1,049.10 (HighrollerSportBets)
+[INFO] StakeService: Detected high-value bet: IID sport:482658692 $1,111.00 (HighrollerSportBets)
+[INFO] TradeService.flushTradeBatch: Flushing trade batch of size 1001
+[INFO] TradeService.flushTradeBatch: Flushing trade batch of size 3
+[INFO] StakeService: Detected high-value bet: IID sport:482658807 $1,800.36 (HighrollerSportBets)
+[INFO] StakeService.flushBetsBatch: Flushing bets batch of size 24
+[INFO] StakeService.scanAndAlert: Found 0 candidates needing alert

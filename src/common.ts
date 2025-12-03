@@ -35,3 +35,16 @@ export function isValidHyperliquidAddress(wallet: string): boolean {
     const regex = /^0x[0-9a-f]{40}$/i;
     return regex.test(wallet);
 }
+
+export function formatCurrency(value: number): string {
+    const abs = Math.abs(value).toLocaleString('en-US', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+    });
+    const prefix = value < 0 ? '-' : '';
+    return `${prefix}$${abs}`;
+}
+
+export function capitalize(val: string): string {
+    return String(val).charAt(0).toUpperCase() + String(val).slice(1);
+}

@@ -3,10 +3,14 @@ import { config } from './config';
 import * as common from './common';
 import { connectDB, closeDB, TradeDirection } from './services/db';
 import TradeService from './services/trade';
+import StakeService from './services/stake';
 import { closeRedis, connectRedis } from './services/redis';
+import { Tracker } from './common/tracker';
 
 const bot = new Telegraf(config.telegram.botToken);
 const tradeService = new TradeService(bot);
+const stakeService = new StakeService(bot);
+const services: Tracker[] = [tradeService, stakeService];
 
 async function checkMessageSource(ctx: Context, requireOwner: boolean): Promise<boolean> {
     if (!ctx.chat || !ctx.from) {
@@ -95,23 +99,23 @@ async function extractTrackData(
 function registerHandlers(): void {
     bot.command('start', async (ctx) => {
         if (!(await checkMessageSource(ctx, true))) return;
-        if (tradeService.isActive()) {
+        if (serviceActive()) {
             await ctx.reply('Monitoring is already running.');
             return;
         }
         common.logInfo(`Starting monitoring.`);
         if (ctx) await ctx.reply('Monitoring started.');
-        void tradeService.start();
+        startMonitoringServices();
     });
 
     bot.command('stop', async (ctx) => {
         if (!(await checkMessageSource(ctx, true))) return;
-        if (!tradeService.isActive()) {
+        if (!serviceActive()) {
             await ctx.reply('Monitoring is not running.');
             return;
         }
         common.logInfo('Monitoring stopped.');
-        await tradeService.stop();
+        stopMonitoringServices();
     });
 
     bot.command('stats', async (ctx) => {
@@ -185,27 +189,50 @@ function registerHandlers(): void {
     });
 }
 
+function startMonitoringServices(): void {
+    for (const service of services) {
+        common.logInfo(`Auto-starting service: ${service.constructor.name}`);
+        void service.start();
+    }
+}
+
+function stopMonitoringServices(): void {
+    for (const service of services) {
+        common.logInfo(`Stopping service: ${service.constructor.name}`);
+        void service.stop();
+    }
+}
+
+function serviceActive(): boolean {
+    for (const service of services) {
+        if (service.isActive()) {
+            return true;
+        }
+    }
+    return false;
+}
+
 async function main(): Promise<void> {
     await connectDB();
     await connectRedis();
     registerHandlers();
     await ensureBotReady();
     if (config.monitor.autostart) {
-        common.logInfo('Auto-starting monitoring service.');
-        void tradeService.start();
+        common.logInfo('Auto-starting monitoring services.');
+        startMonitoringServices();
     }
     await bot.launch(() => common.logInfo('Bot started'));
     process.once('SIGINT', () => {
         bot.stop('SIGINT');
         void closeDB();
         void closeRedis();
-        void tradeService.stop();
+        stopMonitoringServices();
     });
     process.once('SIGTERM', () => {
         bot.stop('SIGTERM');
         void closeDB();
         void closeRedis();
-        void tradeService.stop();
+        stopMonitoringServices();
     });
 }
 
