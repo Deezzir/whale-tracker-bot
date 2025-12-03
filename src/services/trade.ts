@@ -1,10 +1,11 @@
 import axios from 'axios';
 import { config } from '../config';
 import * as common from '../common';
-import DBService, { AggregationRecord, TradeDirection, TrackedWallet } from './db.js';
-import { Markup, Telegraf } from 'telegraf';
-import { getRedisClient } from './redis';
+import DBService, { HyperAggregationRecord, TradeDirection, HyperTrackedRecord, TradeRecord } from './db.js';
+import { Markup } from 'telegraf';
 import { InlineKeyboardMarkup } from 'telegraf/types';
+import { Tracker } from '../common/tracker';
+import { Mutex } from '../common/mutex';
 
 export interface WsTrade {
     coin: string;
@@ -95,25 +96,16 @@ interface AlertContext {
     state: TraderState;
 }
 
-export default class TradeService {
-    private bot: Telegraf;
-    private redis = getRedisClient();
+export default class TradeService extends Tracker {
     private perpStatsKey = 'trade:perpStats';
     private spotStatsKey = 'trade:spotStats';
     private portfolioCacheKey = 'trade:portfolioCache';
     private clearinghouseCacheKey = 'trade:clearinghouseCache';
-    private monitoring = false;
-    private monitorTask?: Promise<void>;
     private wss = new Map<string, WebSocket>();
     private pingIntervals = new Map<string, NodeJS.Timeout>();
-
-    constructor(bot: Telegraf) {
-        this.bot = bot;
-    }
-
-    isActive(): boolean {
-        return this.monitoring;
-    }
+    private tradeBatch: TradeRecord[] = [];
+    private batchInterval?: NodeJS.Timeout;
+    private flushMutex = new Mutex();
 
     async start(): Promise<void> {
         if (this.monitoring) return;
@@ -123,6 +115,7 @@ export default class TradeService {
         const names = await this.fetchCoins();
         if (names.length === 0) {
             this.bot.telegram.sendMessage(config.telegram.targetGroupID, 'Unable to load trading universes.');
+            this.monitoring = false;
             return;
         }
 
@@ -131,6 +124,12 @@ export default class TradeService {
             this.wss.set(name, ws);
             await common.sleep(50);
         }
+
+        this.batchInterval = setInterval(() => {
+            this.flushTradeBatch().catch((error) =>
+                common.logError(`TradeService.batchInterval: error flushing trade batch: ${error}`)
+            );
+        }, config.hyperliquid.tradeBatchFlushIntervalMs);
 
         this.monitorTask = this.mainLoop();
     }
@@ -148,6 +147,7 @@ export default class TradeService {
         this.pingIntervals.clear();
         for (const ws of this.wss.values()) ws.close();
         this.wss.clear();
+        if (this.batchInterval) clearInterval(this.batchInterval);
     }
 
     async track(wallet: string, coin: string, direction: TradeDirection): Promise<string> {
@@ -294,7 +294,7 @@ export default class TradeService {
         const cleanupLoop = async () => {
             while (this.monitoring) {
                 try {
-                    await DBService.cleanTrades(config.monitor.aggregationWindowMs);
+                    await DBService.cleanTrades(config.hyperliquid.cleanupTTLms);
                 } catch (error) {
                     common.logError(`TradeService.mainLoop cleanup: ${error}`);
                 }
@@ -311,7 +311,7 @@ export default class TradeService {
                     common.logError(`TradeService.mainLoop cleanup: ${error}`);
                 }
                 if (!this.monitoring) break;
-                await this.cancellableSleep(config.monitor.trackCheckIntervalMs);
+                await this.cancellableSleep(config.hyperliquid.trackCheckIntervalMs);
             }
         };
 
@@ -320,8 +320,8 @@ export default class TradeService {
 
     private async scanAndAlert(): Promise<void> {
         const candidates = await DBService.getTradesToAlert(
-            config.monitor.minSuspiciousNotionalUSD,
-            config.monitor.aggregationWindowMs
+            config.hyperliquid.minSuspiciousNotionalUSD,
+            config.hyperliquid.aggregationWindowMs
         );
 
         common.logInfo(`TradeService.scanAndAlert: Found ${candidates.length} candidates needing alert`);
@@ -351,23 +351,7 @@ export default class TradeService {
         }
     }
 
-    private async cancellableSleep(ms: number): Promise<void> {
-        const checkInterval = 1000;
-        const iterations = Math.floor(ms / checkInterval);
-        const remainder = ms % checkInterval;
-
-        for (let i = 0; i < iterations; i++) {
-            if (!this.monitoring) {
-                common.logInfo('TradeService.cancellableSleep: sleep interrupted by stop request.');
-                return;
-            }
-            await common.sleep(checkInterval);
-        }
-
-        if (remainder > 0 && this.monitoring) await common.sleep(remainder);
-    }
-
-    private async processTrackedWallet(tracked: TrackedWallet): Promise<void> {
+    private async processTrackedWallet(tracked: HyperTrackedRecord): Promise<void> {
         const state = await this.fetchTraderStats(tracked.wallet);
         if (!state) {
             common.logInfo(`Unable to fetch state for tracked wallet ${tracked.wallet}`);
@@ -404,8 +388,8 @@ export default class TradeService {
         }
 
         const currentNotional = Math.abs(currentSzi) * parseFloat(currentPosition.position.entryPx || '0');
-        const increaseThreshold = tracked.totalNotional * (1 + config.monitor.posChangeAlertPercent / 100);
-        const decreaseThreshold = tracked.totalNotional * (1 - config.monitor.posChangeAlertPercent / 100);
+        const increaseThreshold = tracked.totalNotional * (1 + config.hyperliquid.posChangeAlertPercent / 100);
+        const decreaseThreshold = tracked.totalNotional * (1 - config.hyperliquid.posChangeAlertPercent / 100);
         if (currentNotional > increaseThreshold || currentNotional < decreaseThreshold) {
             await this.sendPositionChangedMessage(tracked.id, tracked.wallet, tracked.coin, tracked.direction, 'size', {
                 previousNotional: tracked.totalNotional,
@@ -417,7 +401,7 @@ export default class TradeService {
                 tracked.coin,
                 tracked.direction,
                 currentNotional,
-                config.monitor.trackCheckIntervalMs
+                config.hyperliquid.trackCheckIntervalMs
             );
         } else {
             await DBService.addUpdateTrackedWallet(
@@ -425,16 +409,21 @@ export default class TradeService {
                 tracked.coin,
                 tracked.direction,
                 tracked.totalNotional,
-                config.monitor.trackCheckIntervalMs
+                config.hyperliquid.trackCheckIntervalMs
             );
         }
     }
 
-    private async processAlertCandidate(candidate: AggregationRecord): Promise<void> {
+    private async processAlertCandidate(candidate: HyperAggregationRecord): Promise<void> {
+        common.logInfo(
+            `TradeService: Detected high-value trade: ${candidate.wallet} ${candidate.coin} ${common.formatCurrency(candidate.totalNotional)} (${candidate.direction})`
+        );
         const portfolio = await this.fetchPortfolio(candidate.wallet);
         if (!portfolio) return;
         if (!this.isFreshWallet(portfolio)) {
-            common.logInfo(`Skipping alert for wallet ${candidate.wallet} as it is not fresh`);
+            common.logInfo(
+                `TradeService: Skipping alert for high-value trade (not fresh wallet): ${candidate.wallet} ${candidate.coin} ${common.formatCurrency(candidate.totalNotional)} (${candidate.direction})`
+            );
             await DBService.markTradeAlerted(candidate.wallet, candidate.coin, candidate.dateKey, candidate.direction);
             return;
         }
@@ -444,7 +433,7 @@ export default class TradeService {
         const positionState = state.assetPositions?.find((pos) => pos.position?.coin === candidate.coin);
         if (!positionState || !positionState.position) {
             common.logInfo(
-                `No position found for wallet ${candidate.wallet} on coin ${candidate.coin}, marking alert done`
+                `TradeService: Skipping alert for high-value trade (no position found): ${candidate.wallet} ${candidate.coin} ${common.formatCurrency(candidate.totalNotional)} (${candidate.direction})`
             );
             await DBService.markTradeAlerted(candidate.wallet, candidate.coin, candidate.dateKey, candidate.direction);
             return;
@@ -452,20 +441,20 @@ export default class TradeService {
         const direction: TradeDirection = parseFloat(positionState.position.szi) > 0 ? 'long' : 'short';
         if (direction !== candidate.direction) {
             common.logInfo(
-                `Position direction mismatch for wallet ${candidate.wallet} on coin ${candidate.coin}, marking alert done`
+                `TradeService: Skipping alert for high-value trade (direction mismatch): ${candidate.wallet} ${candidate.coin} ${common.formatCurrency(candidate.totalNotional)} (${candidate.direction})`
             );
             await DBService.markTradeAlerted(candidate.wallet, candidate.coin, candidate.dateKey, candidate.direction);
             return;
         }
 
         common.logInfo(
-            `Alerting on wallet ${candidate.wallet} for coin ${candidate.coin} with size ${candidate.totalNotional}`
+            `TradeService: Sending alert for high-value trade: ${candidate.wallet} ${candidate.coin} ${common.formatCurrency(candidate.totalNotional)} (${candidate.direction})`
         );
         const alertContext: AlertContext = {
             id: candidate.id,
             aggregateTotalNotional: candidate.totalNotional,
             aggregateTradeCount: candidate.tradeCount,
-            aggregationWindowMs: config.monitor.aggregationWindowMs,
+            aggregationWindowMs: config.hyperliquid.aggregationWindowMs,
             positionState: positionState,
             lastTradeTime: candidate.lastTradeTime,
             state: state
@@ -474,7 +463,7 @@ export default class TradeService {
         const result = this.formatAlertMessage(candidate.coin, candidate.wallet, alertContext);
         if (!result) return;
         const { msg, buttons } = result;
-        if (config.monitor.mainCoins.includes(candidate.coin))
+        if (config.hyperliquid.mainCoins.includes(candidate.coin))
             await this.bot.telegram.sendMessage(config.telegram.targetGroupID, msg, {
                 parse_mode: 'HTML',
                 message_thread_id: config.telegram.targetMainTopicID,
@@ -518,12 +507,10 @@ export default class TradeService {
         };
 
         ws.onopen = () => {
-            common.logInfo(`Connected to coin: ${name}`);
+            common.logInfo(`WebSocket connected for coin: ${name}`);
             ws.send(JSON.stringify(payload));
             const pingInterval = setInterval(() => {
-                if (ws.readyState === WebSocket.OPEN) {
-                    ws.send(JSON.stringify({ method: 'ping' }));
-                }
+                if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ method: 'ping' }));
             }, 30000);
             this.pingIntervals.set(name, pingInterval);
         };
@@ -548,9 +535,7 @@ export default class TradeService {
 
         ws.onerror = (error) => {
             common.logError(`WebSocket error in coin ${name}: ${error}`);
-            if (ws.readyState !== WebSocket.OPEN) {
-                this.reconnectWebSocket(name);
-            }
+            if (ws.readyState !== WebSocket.OPEN) this.reconnectWebSocket(name);
         };
 
         ws.onclose = (event) => {
@@ -642,7 +627,7 @@ export default class TradeService {
                     lines.push(`Mid Price: <code>$${perpCtx.midPx}</code>`);
                     lines.push(`Oracle Price: <code>$${perpCtx.oraclePx}</code>`);
                     lines.push('');
-                    lines.push(`24h Volume: <code>${this.formatCurrency(parseFloat(perpCtx.dayNtlVlm))}</code>`);
+                    lines.push(`24h Volume: <code>${common.formatCurrency(parseFloat(perpCtx.dayNtlVlm))}</code>`);
                     lines.push(`Open Interest: <code>${parseFloat(perpCtx.openInterest).toFixed(2)}</code>`);
                     lines.push(`Funding Rate: <code>${(parseFloat(perpCtx.funding) * 100).toFixed(4)}%</code>`);
                     lines.push(`Premium: <code>${(parseFloat(perpCtx.premium) * 100).toFixed(4)}%</code>`);
@@ -683,7 +668,7 @@ export default class TradeService {
                     lines.push(`Mark Price: <code>$${spotCtx.markPx}</code>`);
                     lines.push(`Mid Price: <code>$${spotCtx.midPx}</code>`);
                     lines.push('');
-                    lines.push(`24h Volume: <code>${this.formatCurrency(parseFloat(spotCtx.dayNtlVlm))}</code>`);
+                    lines.push(`24h Volume: <code>${common.formatCurrency(parseFloat(spotCtx.dayNtlVlm))}</code>`);
 
                     const priceChange =
                         ((parseFloat(spotCtx.markPx) - parseFloat(spotCtx.prevDayPx)) / parseFloat(spotCtx.prevDayPx)) *
@@ -748,15 +733,6 @@ export default class TradeService {
         }
     }
 
-    private formatCurrency(value: number): string {
-        const abs = Math.abs(value).toLocaleString('en-US', {
-            minimumFractionDigits: 2,
-            maximumFractionDigits: 2
-        });
-        const prefix = value < 0 ? '-' : '';
-        return `${prefix}$${abs}`;
-    }
-
     private extractPositionDetails(pos: Position): {
         direction: TradeDirection;
         rank: number;
@@ -801,13 +777,13 @@ export default class TradeService {
             '',
             `<b>Leverage:</b> <code>${rank.toFixed(2)}x</code>`,
             `<b>Entry Price:</b> <code>${this.escapeHtml(entryPrice)}</code>`,
-            `<b>Position Size:</b> <code>${this.formatCurrency(positionSize)}</code>`,
-            `<b>Unrealized PnL:</b> <code>${this.formatCurrency(pnl)}</code>`,
+            `<b>Position Size:</b> <code>${common.formatCurrency(positionSize)}</code>`,
+            `<b>Unrealized PnL:</b> <code>${common.formatCurrency(pnl)}</code>`,
             `<b>Total Trades:</b> ${posTrades}`,
             '',
-            `<b>Trader Profile</b>`,
+            `📈 <b>Trader Profile</b> 📈`,
             `Wallet: <code>${this.escapeHtml(buyer)}</code>`,
-            `Account Value: <code>${this.formatCurrency(accountValue)}</code>`,
+            `Account Value: <code>${common.formatCurrency(accountValue)}</code>`,
             `Coins Traded: ${coinsTraded}`
         ];
         return {
@@ -851,24 +827,42 @@ export default class TradeService {
                 return true;
             }
             const firstTimestamp = history[0][0];
-            return now - firstTimestamp <= config.monitor.freshWindowMs;
+            return now - firstTimestamp <= config.hyperliquid.freshWindowMs;
         };
 
         return buckets.some(([, stats]) => bucketIsFresh(stats));
     }
 
+    async flushTradeBatch(): Promise<void> {
+        await this.flushMutex.runExclusive(async () => {
+            if (this.tradeBatch.length === 0) return;
+            const batchToFlush = [...this.tradeBatch];
+            this.tradeBatch = [];
+
+            try {
+                common.logInfo(`TradeService.flushTradeBatch: Flushing trade batch of size ${batchToFlush.length}`);
+                await DBService.addTradesBulk(batchToFlush, config.hyperliquid.aggregationWindowMs);
+            } catch (error) {
+                common.logError(`TradeService.flushTradeBatch: Error flushing trade batch: ${error}`);
+            }
+        });
+    }
     async handleTrade(trade: WsTrade, coin: string): Promise<void> {
         const notional = parseFloat(trade.px) * parseFloat(trade.sz);
-        if (!Number.isFinite(notional)) {
-            return;
-        }
+        if (!Number.isFinite(notional)) return;
         const buyer = trade.users[0];
-        if (!buyer) {
-            return;
-        }
+        if (!buyer) return;
 
         const direction: TradeDirection = trade.side === 'B' ? 'long' : 'short';
-        await DBService.addTrade(buyer, coin, notional, trade.time, direction, config.monitor.aggregationWindowMs);
+
+        this.tradeBatch.push({
+            wallet: buyer,
+            coin,
+            notional,
+            tradeTime: trade.time,
+            direction
+        });
+        if (this.tradeBatch.length >= config.hyperliquid.tradeBatchSize) await this.flushTradeBatch();
     }
 
     private async fetchCoins(): Promise<string[]> {
@@ -952,13 +946,13 @@ export default class TradeService {
                     '',
                     `${directionIcon} <b>Coin:</b> <code>${this.escapeHtml(coin)}</code> (${directionLabel})`,
                     '',
-                    `<b>Previous Size:</b> <code>${this.formatCurrency(extra.previousNotional)}</code>`,
-                    `<b>Current Size:</b> <code>${this.formatCurrency(extra.currentNotional)}</code>`,
+                    `<b>Previous Size:</b> <code>${common.formatCurrency(extra.previousNotional)}</code>`,
+                    `<b>Current Size:</b> <code>${common.formatCurrency(extra.currentNotional)}</code>`,
                     `<b>Change:</b> <code>${changePercent.toFixed(2)}%</code>`,
                     '',
                     `<b>Leverage:</b> <code>${rank.toFixed(2)}x</code>`,
                     `<b>Entry Price:</b> <code>${this.escapeHtml(entryPrice)}</code>`,
-                    `<b>Unrealized PnL:</b> <code>${this.formatCurrency(pnl)}</code>`,
+                    `<b>Unrealized PnL:</b> <code>${common.formatCurrency(pnl)}</code>`,
                     '',
                     `Wallet: <code>${this.escapeHtml(wallet)}</code>`
                 );
@@ -980,7 +974,7 @@ export default class TradeService {
         };
 
         try {
-            if (config.monitor.mainCoins.includes(coin)) {
+            if (config.hyperliquid.mainCoins.includes(coin)) {
                 await this.bot.telegram.sendMessage(config.telegram.targetGroupID, lines.join('\n'), {
                     parse_mode: 'HTML',
                     message_thread_id: config.telegram.targetTrackTopicID,

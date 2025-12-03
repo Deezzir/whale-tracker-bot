@@ -2,35 +2,33 @@ import mongoose, { Document, Schema } from 'mongoose';
 import { config, Environment } from '../config';
 import * as common from '../common';
 
+// Hyperliquid wallet aggregation schema
 export type TradeDirection = 'long' | 'short';
 
-export interface AggregationResult {
+interface HyperAggregationDocument extends Document {
     wallet: string;
     coin: string;
     dateKey: string;
     direction: TradeDirection;
     totalNotional: number;
     tradeCount: number;
+    lastTradeTime: number;
+    lastAlertedAt?: number;
 }
 
-export interface AggregationRecord extends AggregationResult {
+export type HyperAggregationRecord = Omit<HyperAggregationDocument, keyof Document> & {
     id: string;
-    lastTradeTime: number;
-    lastAlertedAt?: number;
-}
+};
 
-interface WalletAggregationDocument extends Document {
+export type TradeRecord = {
     wallet: string;
     coin: string;
-    dateKey: string;
+    notional: number;
+    tradeTime: number;
     direction: TradeDirection;
-    totalNotional: number;
-    tradeCount: number;
-    lastTradeTime: number;
-    lastAlertedAt?: number;
-}
+};
 
-const WalletAggregationSchema = new Schema<WalletAggregationDocument>(
+const HyperAggregationSchema = new Schema<HyperAggregationDocument>(
     {
         wallet: { type: String, required: true },
         coin: { type: String, required: true },
@@ -44,12 +42,13 @@ const WalletAggregationSchema = new Schema<WalletAggregationDocument>(
     { timestamps: true }
 );
 
-WalletAggregationSchema.index({ wallet: 1, coin: 1, dateKey: 1, direction: 1 }, { unique: true });
-const WalletAggregationModel =
+HyperAggregationSchema.index({ wallet: 1, coin: 1, dateKey: 1, direction: 1 }, { unique: true });
+const HyperAggregationModel =
     mongoose.models.WalletAggregation ||
-    mongoose.model<WalletAggregationDocument>('WalletAggregation', WalletAggregationSchema);
+    mongoose.model<HyperAggregationDocument>('HyperAggregation', HyperAggregationSchema);
 
-interface WalletTracking extends Document {
+// Hyperliquid tracked wallets schema
+interface HyperTrackedDocument extends Document {
     wallet: string;
     coin: string;
     totalNotional: number;
@@ -58,17 +57,11 @@ interface WalletTracking extends Document {
     nextCheckAt?: number;
 }
 
-export interface TrackedWallet {
+export type HyperTrackedRecord = Omit<HyperTrackedDocument, keyof Document> & {
     id: string;
-    wallet: string;
-    coin: string;
-    totalNotional: number;
-    direction: TradeDirection;
-    lastCheckedAt: number;
-    nextCheckAt?: number;
-}
+};
 
-const WalletTrackingSchema = new Schema<WalletTracking>(
+const HyperTrackedSchema = new Schema<HyperTrackedDocument>(
     {
         wallet: { type: String, required: true, unique: true },
         coin: { type: String, required: true },
@@ -80,9 +73,83 @@ const WalletTrackingSchema = new Schema<WalletTracking>(
     { timestamps: true }
 );
 
-const WalletTrackingModel =
-    mongoose.models.WalletTracking || mongoose.model<WalletTracking>('WalletTracking', WalletTrackingSchema);
+const HyperTrackedModel =
+    mongoose.models.WalletTracking || mongoose.model<HyperTrackedDocument>('HyperTrack', HyperTrackedSchema);
 
+// Stake record schema
+export interface SwishBetOutcome {
+    odds: number;
+    event: {
+        live: boolean;
+        sport: string;
+        competitor: string;
+        lineType: string;
+        lineValue: number;
+        lineName: string;
+    };
+}
+
+export interface SportBetOutcome {
+    odds: number;
+    event: {
+        live: boolean;
+        sport: string;
+        name: string;
+        abbreviation: string;
+        outcome: string;
+        market: string;
+    };
+}
+
+export interface RacingBetOutcome {
+    event: {
+        live: boolean;
+        type: string;
+        sport: string;
+        venue: string;
+        runners: {
+            name: string;
+            number: number | null;
+        }[];
+        odds: {
+            odds: number;
+            type: string;
+        }[];
+    };
+}
+
+export type BetOutcome = SwishBetOutcome | SportBetOutcome | RacingBetOutcome;
+export type BetType = 'SwishBet' | 'SportBet' | 'RacingBet';
+
+export interface StakeBetDocument extends Document {
+    iid: string;
+    type: BetType;
+    potentialMultiplier?: number | null;
+    amountUSD: number;
+    outcomes: BetOutcome[];
+    lastAlertedAt?: number;
+}
+
+export type StakeBetRecord = Omit<StakeBetDocument, keyof Document> & {
+    id: string;
+};
+
+const StakeBetSchema = new Schema<StakeBetDocument>(
+    {
+        type: { type: String, required: true, enum: ['SwishBet', 'SportBet', 'RacingBet'] },
+        potentialMultiplier: { type: Number },
+        amountUSD: { type: Number, required: true },
+        outcomes: { type: [Schema.Types.Mixed], required: true } as any,
+        iid: { type: String, required: true, unique: true },
+        lastAlertedAt: { type: Number }
+    },
+    { timestamps: true }
+);
+
+export const StakeBetModel =
+    mongoose.models.StakeBetRecord || mongoose.model<StakeBetDocument>('StakeBet', StakeBetSchema);
+
+// DB Service
 export default class DBService {
     private static formatDateKey(timestamp: number, windowMs?: number): string {
         if (!windowMs) {
@@ -94,7 +161,7 @@ export default class DBService {
 
     static async isWalletTracked(wallet: string, coin: string, direction: TradeDirection): Promise<boolean> {
         try {
-            const doc = await WalletTrackingModel.findOne({ wallet, coin, direction }).lean().exec();
+            const doc = await HyperTrackedModel.findOne({ wallet, coin, direction }).lean().exec();
             return doc !== null;
         } catch (error) {
             common.logError(`DBService.isWalletTracked: Error checking tracked wallet ${wallet}: ${error}`);
@@ -110,7 +177,7 @@ export default class DBService {
         checkInterval?: number
     ): Promise<void> {
         try {
-            await WalletTrackingModel.updateOne(
+            await HyperTrackedModel.updateOne(
                 { wallet, coin, direction },
                 {
                     $set: {
@@ -127,9 +194,9 @@ export default class DBService {
         }
     }
 
-    static async getTrackedWallets(): Promise<TrackedWallet[]> {
+    static async getTrackedWallets(): Promise<HyperTrackedRecord[]> {
         try {
-            const docs = await WalletTrackingModel.find().lean().exec();
+            const docs = await HyperTrackedModel.find().lean().exec();
             return docs.map((doc) => ({
                 id: String(doc._id),
                 wallet: doc.wallet,
@@ -145,10 +212,10 @@ export default class DBService {
         }
     }
 
-    static async getTradeById(id: string): Promise<AggregationRecord | null> {
+    static async getTradeById(id: string): Promise<HyperAggregationRecord | null> {
         try {
-            const doc = await WalletAggregationModel.findOne({ _id: new mongoose.Types.ObjectId(id) })
-                .lean<AggregationRecord>()
+            const doc = await HyperAggregationModel.findOne({ _id: new mongoose.Types.ObjectId(id) })
+                .lean<HyperAggregationRecord>()
                 .exec();
             return doc;
         } catch (error) {
@@ -157,25 +224,48 @@ export default class DBService {
         }
     }
 
-    static async addTrade(
-        wallet: string,
-        coin: string,
-        notional: number,
-        tradeTime: number,
-        direction: TradeDirection,
-        windowMs?: number
-    ): Promise<AggregationResult> {
+    static async addTradesBulk(trades: TradeRecord[], windowMs?: number): Promise<boolean> {
         try {
-            const dateKey = this.formatDateKey(tradeTime, windowMs);
-            const doc = await WalletAggregationModel.findOneAndUpdate(
-                { wallet, coin, dateKey, direction },
+            const bulkOps = trades.map((trade) => {
+                const dateKey = this.formatDateKey(trade.tradeTime, windowMs);
+                return {
+                    updateOne: {
+                        filter: { wallet: trade.wallet, coin: trade.coin, dateKey, direction: trade.direction },
+                        update: {
+                            $inc: {
+                                totalNotional: trade.notional,
+                                tradeCount: 1
+                            },
+                            $set: {
+                                lastTradeTime: trade.tradeTime
+                            }
+                        },
+                        upsert: true,
+                        setDefaultsOnInsert: true
+                    }
+                };
+            });
+
+            const result = await HyperAggregationModel.bulkWrite(bulkOps, { ordered: false });
+            return result.ok === 1;
+        } catch (error) {
+            common.logError(`DBService.addTradeButch: Error recording trade batch: ${error}`);
+            throw error;
+        }
+    }
+
+    static async addTrade(trade: TradeRecord, windowMs?: number): Promise<HyperAggregationRecord> {
+        try {
+            const dateKey = this.formatDateKey(trade.tradeTime, windowMs);
+            const doc = await HyperAggregationModel.findOneAndUpdate(
+                { wallet: trade.wallet, coin: trade.coin, dateKey, direction: trade.direction },
                 {
                     $inc: {
-                        totalNotional: notional,
+                        totalNotional: trade.notional,
                         tradeCount: 1
                     },
                     $set: {
-                        lastTradeTime: tradeTime
+                        lastTradeTime: trade.tradeTime
                     }
                 },
                 {
@@ -190,15 +280,18 @@ export default class DBService {
             }
 
             return {
+                id: String(doc._id),
                 wallet: doc.wallet,
                 coin: doc.coin,
                 dateKey: doc.dateKey,
                 direction: doc.direction as TradeDirection,
                 totalNotional: doc.totalNotional,
-                tradeCount: doc.tradeCount
+                tradeCount: doc.tradeCount,
+                lastTradeTime: doc.lastTradeTime,
+                lastAlertedAt: doc.lastAlertedAt
             };
         } catch (error) {
-            common.logError(`DBService.recordTrade: Error recording trade for wallet ${wallet}: ${error}`);
+            common.logError(`DBService.recordTrade: Error recording trade for wallet ${trade.wallet}: ${error}`);
             throw error;
         }
     }
@@ -210,7 +303,7 @@ export default class DBService {
         direction: TradeDirection
     ): Promise<void> {
         try {
-            await WalletAggregationModel.updateOne(
+            await HyperAggregationModel.updateOne(
                 { wallet, coin, dateKey, direction },
                 {
                     $set: {
@@ -226,9 +319,9 @@ export default class DBService {
         }
     }
 
-    static async getExpiredTrackedWallets(): Promise<TrackedWallet[]> {
+    static async getExpiredTrackedWallets(): Promise<HyperTrackedRecord[]> {
         try {
-            const docs = await WalletTrackingModel.find({ nextCheckAt: { $lte: Date.now() } })
+            const docs = await HyperTrackedModel.find({ nextCheckAt: { $lte: Date.now() } })
                 .lean()
                 .exec();
             return docs.map((doc) => ({
@@ -250,9 +343,9 @@ export default class DBService {
         wallet: string,
         coin: string,
         direction: TradeDirection
-    ): Promise<TrackedWallet | null> {
+    ): Promise<HyperTrackedRecord | null> {
         try {
-            const deleted = await WalletTrackingModel.findOneAndDelete({
+            const deleted = await HyperTrackedModel.findOneAndDelete({
                 wallet,
                 coin,
                 direction
@@ -271,9 +364,9 @@ export default class DBService {
         }
     }
 
-    static async removeTrackedWalletById(id: string): Promise<TrackedWallet | null> {
+    static async removeTrackedWalletById(id: string): Promise<HyperTrackedRecord | null> {
         try {
-            const deleted = await WalletTrackingModel.findByIdAndDelete(id);
+            const deleted = await HyperTrackedModel.findByIdAndDelete(id);
 
             if (deleted) common.logInfo(`DBService.removeTrackedWalletById: Removed tracked wallet with id ${id}`);
             return deleted;
@@ -283,10 +376,10 @@ export default class DBService {
         }
     }
 
-    static async getTradesToAlert(threshold: number, windowMs?: number): Promise<AggregationRecord[]> {
+    static async getTradesToAlert(threshold: number, windowMs?: number): Promise<HyperAggregationRecord[]> {
         try {
             const dateKey = this.formatDateKey(Date.now(), windowMs);
-            const docs = await WalletAggregationModel.find(
+            const docs = await HyperAggregationModel.find(
                 {
                     dateKey,
                     totalNotional: { $gte: threshold },
@@ -323,13 +416,107 @@ export default class DBService {
         }
     }
 
-    static async cleanTrades(windowMs: number): Promise<void> {
+    static async cleanTrades(ttlMs: number): Promise<void> {
         try {
-            const cutoffDate = new Date(Date.now() - 2 * windowMs).toISOString();
-            const result = await WalletAggregationModel.deleteMany({ dateKey: { $lt: cutoffDate } });
-            common.logInfo(`DBService.cleanupOldRecords: Deleted ${result.deletedCount} old aggregation records`);
+            const cutoffDate = new Date(Date.now() - ttlMs).toISOString();
+            const result = await HyperAggregationModel.deleteMany({ updatedAt: { $lt: cutoffDate } });
+            common.logInfo(`DBService.cleanTrades: Deleted ${result.deletedCount} old records`);
         } catch (error) {
-            common.logError(`DBService.cleanupOldRecords: ${error}`);
+            common.logError(`DBService.cleanTrades: ${error}`);
+            throw error;
+        }
+    }
+
+    static async cleanBets(ttlMs: number): Promise<void> {
+        try {
+            const cutoffDate = new Date(Date.now() - ttlMs).toISOString();
+            const result = await StakeBetModel.deleteMany({ updatedAt: { $lt: cutoffDate } });
+            common.logInfo(`DBService.cleanBets: Deleted ${result.deletedCount} old records`);
+        } catch (error) {
+            common.logError(`DBService.cleanBets: ${error}`);
+            throw error;
+        }
+    }
+
+    static async addStakeBet(bet: Partial<StakeBetDocument>): Promise<StakeBetDocument> {
+        try {
+            const newBet = new StakeBetModel(bet);
+            await newBet.save();
+            return newBet;
+        } catch (error) {
+            common.logError(`DBService.addStakeBetRecord: Error adding stake bet record: ${error}`);
+            throw error;
+        }
+    }
+
+    static async addStakeBetsBulk(bets: Partial<StakeBetDocument>[]): Promise<boolean> {
+        try {
+            const bulkOps = bets.map((bet) => ({
+                updateOne: {
+                    filter: { iid: bet.iid },
+                    update: { $setOnInsert: bet },
+                    upsert: true,
+                    setDefaultsOnInsert: true
+                }
+            }));
+
+            const result = await StakeBetModel.bulkWrite(bulkOps, { ordered: false });
+            return result.ok === 1;
+        } catch (error) {
+            common.logError(`DBService.addStakeBetsBulk: Error adding stake bet records batch: ${error}`);
+            throw error;
+        }
+    }
+
+    static async markStakeBetAlerted(id: string): Promise<void> {
+        try {
+            await StakeBetModel.updateOne(
+                { _id: new mongoose.Types.ObjectId(id) },
+                {
+                    $set: {
+                        lastAlertedAt: Date.now()
+                    }
+                }
+            );
+        } catch (error) {
+            common.logError(
+                `DBService.markStakeBetAlerted: Error marking alerted status for stake bet with id ${id}: ${error}`
+            );
+            throw error;
+        }
+    }
+
+    static async getStakeBetsToAlert(threshold: number, ageMs: number): Promise<StakeBetRecord[]> {
+        try {
+            const docs = await StakeBetModel.find(
+                {
+                    amountUSD: { $gte: threshold },
+                    createdAt: { $gte: new Date(Date.now() - ageMs) },
+                    $or: [{ lastAlertedAt: { $exists: false } }, { lastAlertedAt: null }]
+                },
+                {
+                    iid: 1,
+                    type: 1,
+                    potentialMultiplier: 1,
+                    amountUSD: 1,
+                    outcomes: 1,
+                    lastAlertedAt: 1
+                }
+            )
+                .lean()
+                .exec();
+
+            return docs.map((doc) => ({
+                id: String(doc._id),
+                iid: doc.iid,
+                type: doc.type,
+                potentialMultiplier: doc.potentialMultiplier,
+                amountUSD: doc.amountUSD,
+                outcomes: doc.outcomes,
+                lastAlertedAt: doc.lastAlertedAt
+            }));
+        } catch (error) {
+            common.logError(`DBService.getStakeBetsToAlert: ${error}`);
             throw error;
         }
     }
