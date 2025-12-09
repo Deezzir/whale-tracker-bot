@@ -212,27 +212,37 @@ function serviceActive(): boolean {
     return false;
 }
 
+function shutdown(code: number): void {
+    try {
+        bot.stop();
+    } catch { }
+
+    void closeDB();
+    void closeRedis();
+    stopMonitoringServices();
+
+    setTimeout(() => process.exit(code), 100);
+}
+
 async function main(): Promise<void> {
     await connectDB();
     await connectRedis();
+
     registerHandlers();
     await ensureBotReady();
+
     if (config.monitor.autostart) {
         common.logInfo('Auto-starting monitoring services.');
         startMonitoringServices();
     }
+
     await bot.launch(() => common.logInfo('Bot started'));
-    process.once('SIGINT', () => {
-        bot.stop('SIGINT');
-        void closeDB();
-        void closeRedis();
-        stopMonitoringServices();
-    });
-    process.once('SIGTERM', () => {
-        bot.stop('SIGTERM');
-        void closeDB();
-        void closeRedis();
-        stopMonitoringServices();
+
+    process.once('SIGINT', () => shutdown(0));
+    process.once('SIGTERM', () => shutdown(0));
+    bot.catch((err) => {
+        common.logError(`Bot error: ${err}`);
+        shutdown(1);
     });
 }
 

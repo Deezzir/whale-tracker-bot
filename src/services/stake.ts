@@ -172,16 +172,23 @@ export default class StakeService extends Tracker {
 
         try {
             this.browser = await puppeteer.launch({
-                headless: true,
-                args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-blink-features=AutomationControlled']
+                headless: false,
+                args: [
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
+                    '--disable-blink-features=AutomationControlled',
+                    '--display=:0'
+                ]
             });
             this.page = await this.browser.newPage();
             await this.page.setUserAgent({ userAgent: config.stake.userAgent });
             await this.page.goto(config.stake.url, { waitUntil: 'networkidle2' });
             common.logInfo('StakeService Puppeteer initialized');
+            await common.sleep(60000);
         } catch (error) {
             this.monitoring = false;
             this.page = null;
+            common.logError(`StakeService.start: error initializing Puppeteer: ${error}`);
             this.bot.telegram.sendMessage(config.telegram.targetGroupID, 'Unable to start stake monitoring.');
             return;
         }
@@ -418,7 +425,7 @@ export default class StakeService extends Tracker {
                     if (manager[wsKey]) {
                         try {
                             manager[wsKey].close();
-                        } catch {}
+                        } catch { }
                         manager[wsKey] = null;
                     }
                     if (manager[intervalKey]) {
