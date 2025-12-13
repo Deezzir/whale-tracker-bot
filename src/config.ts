@@ -37,7 +37,8 @@ export const config = {
         autostart: getEnvvar('MONITOR_AUTOSTART', 'true') === 'true',
         cacheTtlMs: 5 * 60 * 1000, // 5 minutes,
         intervalMs: 30 * 1000, // 30 secondss
-        cleanupIntervalMs: 60 * 60 * 1000 // 1 hour
+        cleanupIntervalMs: 60 * 60 * 1000, // 1 hour
+        noDataTimeoutMs: 5 * 60 * 1000 // 5 minutes
     },
     hyperliquid: {
         freshWindowMs: 2 * 24 * 60 * 60 * 1000, // 2 days,

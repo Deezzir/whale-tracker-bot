@@ -220,8 +220,7 @@ function shutdown(code: number): void {
     void closeDB();
     void closeRedis();
     stopMonitoringServices();
-
-    setTimeout(() => process.exit(code), 100);
+    setTimeout(() => process.exit(code), 500);
 }
 
 async function main(): Promise<void> {
@@ -248,5 +247,5 @@ async function main(): Promise<void> {
 
 main().catch((error) => {
     common.logError(`Fatal error during startup: ${error}`);
-    process.exit(1);
+    shutdown(1);
 });

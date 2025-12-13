@@ -1,12 +1,15 @@
 import { Telegraf } from 'telegraf';
 import * as common from '../common';
 import { getRedisClient } from '../services/redis';
+import { config } from '../config';
 
 export abstract class Tracker {
     protected bot: Telegraf;
     protected redis = getRedisClient();
     protected monitoring = false;
     protected monitorTask?: Promise<void>;
+    protected lastDataTimestamp: number = Date.now();
+    protected alertNoDataInterval: NodeJS.Timeout | null = null;
 
     constructor(bot: Telegraf) {
         this.bot = bot;
@@ -17,6 +20,27 @@ export abstract class Tracker {
 
     isActive(): boolean {
         return this.monitoring;
+    }
+
+    protected async alertNoData(timeoutMs: number): Promise<void> {
+        const checkInterval = 1 * 60 * 1000; // 1 minutes
+
+        while (this.monitoring) {
+            try {
+                const now = Date.now();
+                if (now - this.lastDataTimestamp >= timeoutMs) {
+                    common.logWarn('No data received within the specified timeout. Sending alert.');
+                    await this.bot.telegram.sendMessage(
+                        config.telegram.ownerUserID,
+                        `⚠️ Alert: No data received for ${Math.floor(timeoutMs / 60000)} minutes from ${this.constructor.name}.`
+                    );
+                }
+            } catch (err) {
+                common.logError(`Error in alertNoData: ${err}`);
+            }
+            if (!this.monitoring) break;
+            await this.cancellableSleep(checkInterval);
+        }
     }
 
     protected async cancellableSleep(ms: number): Promise<void> {

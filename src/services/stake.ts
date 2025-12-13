@@ -243,7 +243,7 @@ export default class StakeService extends Tracker {
                 await this.cancellableSleep(config.monitor.cleanupIntervalMs);
             }
         };
-        await Promise.all([scanLoop(), cleanupLoop()]);
+        await Promise.all([scanLoop(), cleanupLoop(), this.alertNoData(config.monitor.noDataTimeoutMs)]);
     }
 
     private async scanAndAlert(): Promise<void> {
@@ -425,7 +425,7 @@ export default class StakeService extends Tracker {
                     if (manager[wsKey]) {
                         try {
                             manager[wsKey].close();
-                        } catch { }
+                        } catch {}
                         manager[wsKey] = null;
                     }
                     if (manager[intervalKey]) {
@@ -629,9 +629,9 @@ export default class StakeService extends Tracker {
     private async flushBetsBatch(): Promise<void> {
         await this.flushMutex.runExclusive(async () => {
             if (this.betsBatch.length === 0) return;
-
             const batchToFlush = [...this.betsBatch];
             this.betsBatch = [];
+            this.lastDataTimestamp = Date.now();
 
             const seenIids = new Set<string>();
             const uniqueBets = batchToFlush.filter((bet) => {

@@ -315,7 +315,7 @@ export default class TradeService extends Tracker {
             }
         };
 
-        await Promise.all([scanLoop(), cleanupLoop(), trackLoop()]);
+        await Promise.all([scanLoop(), cleanupLoop(), trackLoop(), this.alertNoData(config.monitor.noDataTimeoutMs)]);
     }
 
     private async scanAndAlert(): Promise<void> {
@@ -838,6 +838,7 @@ export default class TradeService extends Tracker {
             if (this.tradeBatch.length === 0) return;
             const batchToFlush = [...this.tradeBatch];
             this.tradeBatch = [];
+            this.lastDataTimestamp = Date.now();
 
             try {
                 common.logInfo(`TradeService.flushTradeBatch: Flushing trade batch of size ${batchToFlush.length}`);
