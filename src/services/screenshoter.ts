@@ -28,6 +28,8 @@ export default class ScreenshotService {
             headless: true,
             args
         });
+
+        logger.info(`Puppeteer launched with${this.proxy ? ` proxy ${this.proxy.host}:${this.proxy.port}` : 'out proxy'}`);
         logger.info('Puppeteer initialized');
     }
 
@@ -38,7 +40,7 @@ export default class ScreenshotService {
         logger.info('Puppeteer stopped');
     }
 
-    async capture(url: string, selector?: string): Promise<Buffer | null> {
+    async capture(url: string, selector?: string, waitFn?: () => boolean): Promise<Buffer | null> {
         try {
             if (!this.browser) await this.start();
 
@@ -59,6 +61,10 @@ export default class ScreenshotService {
                 await page.goto(url, { waitUntil: 'networkidle2' });
                 await page.waitForSelector('body', { timeout: 10_000 });
                 await sleep(3000);
+
+                if (waitFn) {
+                    await page.waitForFunction(waitFn, { timeout: 15_000, polling: 1000 });
+                }
 
                 if (selector) {
                     const element = await page.waitForSelector(selector, { timeout: 10_000 });

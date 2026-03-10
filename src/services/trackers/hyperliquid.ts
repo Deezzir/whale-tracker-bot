@@ -502,7 +502,23 @@ export default class HyperliquidService extends Tracker {
         let sentWithPhoto = false;
 
         if (config.puppeteer.screenshotEnabled) {
-            const screenshot = await this.screenshoter.capture(`${this.explorer}/address/${candidate.wallet}#perps`);
+            const screenshot = await this.screenshoter.capture(
+                `${this.explorer}/address/${candidate.wallet}#perps`,
+                undefined,
+                () => {
+                    const result = document.evaluate(
+                        '//div[text()=" Overview "]/div/span',
+                        document,
+                        null,
+                        XPathResult.FIRST_ORDERED_NODE_TYPE,
+                        null
+                    );
+                    const el = result.singleNodeValue as Element | null;
+                    if (!el?.textContent) return false;
+                    const num = parseFloat(el.textContent.replace(/,/g, '').replace('$', ''));
+                    return !isNaN(num) && num > 0;
+                }
+            );
             if (screenshot) {
                 messageId = await this.tg.sendPhoto(config.telegram.chatID, screenshot, msg, {
                     reply_markup: buttons,
