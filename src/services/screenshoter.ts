@@ -3,6 +3,7 @@ import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import Logger from '../common/logger';
 import { Browser } from 'puppeteer';
 import ProxyService from './proxies';
+import { sleep } from 'bun';
 
 const logger = new Logger('Screenshoter');
 puppeteer.use(StealthPlugin());
@@ -50,12 +51,14 @@ export default class ScreenshotService {
 
             try {
                 await page.setViewport({ width: 1280, height: 1400 });
+                await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: 'dark' }]);
                 await page.evaluateOnNewDocument(() => {
                     Object.defineProperty(navigator, 'webdriver', { get: () => false });
                 });
 
                 await page.goto(url, { waitUntil: 'networkidle2' });
                 await page.waitForSelector('body', { timeout: 10_000 });
+                await sleep(3000);
 
                 if (selector) {
                     const element = await page.waitForSelector(selector, { timeout: 10_000 });

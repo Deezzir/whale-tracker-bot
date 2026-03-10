@@ -193,8 +193,8 @@ export default class PolymarketService extends Tracker {
         const category: MarketCategory = isEsportsMarket(title)
             ? 'esports'
             : isSportMarket(title)
-              ? 'sport'
-              : 'regular';
+                ? 'sport'
+                : 'regular';
         const threshold =
             category === 'sport' ? config.polymarket.sportAlertThresholdUsd : config.polymarket.alertThresholdUsd;
         if (candidate.netUsd < threshold) {
@@ -303,7 +303,9 @@ export default class PolymarketService extends Tracker {
 
     private reconnectWebSocket() {
         if (this.pingInterval) clearInterval(this.pingInterval);
-        if (this.ws) this.ws.close();
+        const ws = this.ws;
+        this.ws = null;
+        if (ws) ws.close();
         if (this.monitoring) this.subscribeToLiveTrades();
     }
 
@@ -347,7 +349,7 @@ export default class PolymarketService extends Tracker {
         ws.onclose = (event) => {
             const reason = event.reason || 'unknown';
             this.logger.info(`WebSocket closed, reason: ${reason}`);
-            handleClose();
+            if (this.ws === ws) handleClose();
         };
 
         this.ws = ws;
