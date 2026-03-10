@@ -11,9 +11,9 @@ import { Context } from 'telegraf';
 
 const logger = new Logger('Main');
 const telegram: Tg = new Tg();
-const hl = new HyperliquidService(telegram);
-const stake = new StakeService(telegram);
-const poly = new PolymarketService(telegram);
+const hl = new HyperliquidService(telegram, false);
+const stake = new StakeService(telegram, true);
+const poly = new PolymarketService(telegram, false);
 const services: Tracker[] = [hl, stake, poly];
 
 let keepAlive: NodeJS.Timeout;
@@ -175,7 +175,7 @@ async function main(): Promise<void> {
     logger.info('Starting monitoring services.');
     startMonitoringServices();
 
-    keepAlive = setInterval(() => {}, 60_000);
+    keepAlive = setInterval(() => { }, 60_000);
 
     process.once('SIGINT', () => void shutdown(0));
     process.once('SIGTERM', () => void shutdown(0));

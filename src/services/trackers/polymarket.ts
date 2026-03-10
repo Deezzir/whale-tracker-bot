@@ -193,8 +193,8 @@ export default class PolymarketService extends Tracker {
         const category: MarketCategory = isEsportsMarket(title)
             ? 'esports'
             : isSportMarket(title)
-                ? 'sport'
-                : 'regular';
+              ? 'sport'
+              : 'regular';
         const threshold =
             category === 'sport' ? config.polymarket.sportAlertThresholdUsd : config.polymarket.alertThresholdUsd;
         if (candidate.netUsd < threshold) {

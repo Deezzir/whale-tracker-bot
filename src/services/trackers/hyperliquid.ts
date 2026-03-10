@@ -768,7 +768,7 @@ export default class HyperliquidService extends Tracker {
             `Wallet: <code>${escapeHtml(buyer)}</code>`,
             `Account Value: <code>${formatCurrency(accountValue)}</code>`,
             `Coins Traded: ${coinsTraded}`,
-            `<b>Account:</b> #${context.accountTag}`
+            `Account: #${context.accountTag}`
         ];
         return {
             msg: lines.join('\n'),

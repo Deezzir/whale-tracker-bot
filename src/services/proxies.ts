@@ -36,10 +36,11 @@ class ProxyService {
         }
 
         if (proxies.length === 0)
-            proxies = config.puppeteer.proxies.map((proxyStr) => this.parseProxy(proxyStr)).filter((p): p is Proxy => p !== null);
+            proxies = config.puppeteer.proxies
+                .map((proxyStr) => this.parseProxy(proxyStr))
+                .filter((p): p is Proxy => p !== null);
 
-        if (proxies.length === 0)
-            logger.warn('No valid proxies found in file or config');
+        if (proxies.length === 0) logger.warn('No valid proxies found in file or config');
 
         return proxies;
     }
@@ -55,8 +56,7 @@ class ProxyService {
         const [host, port] = hostPort.split(':');
 
         const proxy = { host, port, username, password };
-        logger.info(`Parsed proxy - Host: ${host}, Port: ${port}, Username: ${username} Password: ${password}`);
-
+        logger.info(`Parsed proxy - Host: ${host}, Port: ${port}, Username: ${username} Password: ${password.replace(/./g, '*')}`);
         return proxy;
     }
 

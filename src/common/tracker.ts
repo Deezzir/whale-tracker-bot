@@ -7,10 +7,9 @@ import { Mutex } from './mutex';
 import ScreenshotService from '../services/screenshoter';
 
 export abstract class Tracker {
+    protected screenshoter: ScreenshotService;
+
     protected name: string = this.constructor.name;
-
-    protected screenshoter = new ScreenshotService();
-
     protected logger = new Logger(this.name);
     protected tg: Tg;
 
@@ -21,8 +20,9 @@ export abstract class Tracker {
     protected lastDataTimestamp: number = Date.now();
     protected alertNoDataInterval: NodeJS.Timeout | null = null;
 
-    constructor(tg: Tg) {
+    constructor(tg: Tg, useProxyForScreenshots = false) {
         this.tg = tg;
+        this.screenshoter = new ScreenshotService(useProxyForScreenshots);
     }
 
     abstract start(): Promise<void>;

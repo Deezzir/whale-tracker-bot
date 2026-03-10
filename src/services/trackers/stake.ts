@@ -200,7 +200,9 @@ export default class StakeService extends Tracker {
                 });
 
             await this.page.goto(this.url, { waitUntil: 'networkidle2' });
-            this.logger.info(`Puppeteer launched with${this.proxy ? ` proxy ${this.proxy.host}:${this.proxy.port}` : 'out proxy'}`);
+            this.logger.info(
+                `Puppeteer launched with${this.proxy ? ` proxy ${this.proxy.host}:${this.proxy.port}` : 'out proxy'}`
+            );
             this.logger.info('Puppeteer initialized');
             await sleep(10000);
         } catch (error) {
@@ -453,7 +455,7 @@ export default class StakeService extends Tracker {
                     if (manager[wsKey]) {
                         try {
                             manager[wsKey].close();
-                        } catch { }
+                        } catch {}
                         manager[wsKey] = null;
                     }
                     if (manager[intervalKey]) {

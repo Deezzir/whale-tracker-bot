@@ -91,6 +91,9 @@ export const config = {
         userDir: optionalEnv('PUPPETEER_USER_DIR', '') as string,
         headless: optionalEnv('PUPPETEER_HEADLESS', 'true') === 'true',
         proxiesPath: optionalEnv('PUPPETEER_PROXIES_PATH', './resources/ports.txt') as string,
-        proxies: optionalEnv('PUPPETEER_PROXIES', '').split(',').map(p => p.trim()).filter(p => p) as string[]
+        proxies: optionalEnv('PUPPETEER_PROXIES', '')
+            .split(',')
+            .map((p) => p.trim())
+            .filter((p) => p) as string[]
     }
 } as const;

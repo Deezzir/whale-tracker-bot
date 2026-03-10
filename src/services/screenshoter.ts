@@ -2,7 +2,7 @@ import puppeteer from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import Logger from '../common/logger';
 import { Browser } from 'puppeteer';
-import ProxyService from './proxies';
+import ProxyService, { Proxy } from './proxies';
 import { sleep } from 'bun';
 
 const logger = new Logger('Screenshoter');
@@ -10,7 +10,11 @@ puppeteer.use(StealthPlugin());
 
 export default class ScreenshotService {
     private browser: Browser | null = null;
-    private proxy = ProxyService.getRandomProxy();
+    private proxy: Proxy | null = null;
+
+    constructor(useProxy: boolean) {
+        if (useProxy) this.proxy = ProxyService.getRandomProxy();
+    }
 
     async start(): Promise<void> {
         if (this.browser) return;
@@ -29,7 +33,9 @@ export default class ScreenshotService {
             args
         });
 
-        logger.info(`Puppeteer launched with${this.proxy ? ` proxy ${this.proxy.host}:${this.proxy.port}` : 'out proxy'}`);
+        logger.info(
+            `Puppeteer launched with${this.proxy ? ` proxy ${this.proxy.host}:${this.proxy.port}` : 'out proxy'}`
+        );
         logger.info('Puppeteer initialized');
     }
 
