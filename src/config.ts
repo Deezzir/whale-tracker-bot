@@ -1,13 +1,16 @@
 import dotenv from 'dotenv';
 dotenv.config({ path: './.env' });
 
-function getEnvvar(var_name: string, default_value: string = ''): any {
-    const variable = process.env[var_name] || default_value;
-    if (!variable) {
-        console.error(`${var_name} is not set`);
-        process.exit(1);
+function requireEnv(name: string): string {
+    const value = process.env[name];
+    if (!value) {
+        throw new Error(`Missing required environment variable: ${name}`);
     }
-    return variable;
+    return value;
+}
+
+function optionalEnv(name: string, fallback: string): string {
+    return process.env[name] || fallback;
 }
 
 export enum Environment {
@@ -17,56 +20,73 @@ export enum Environment {
 
 // Config
 export const config = {
-    env: getEnvvar('NODE_ENV', 'development') as Environment,
+    env: optionalEnv('NODE_ENV', 'development') as Environment,
+    logFileEnabled: optionalEnv('LOG_FILE_ENABLED', 'false') === 'true',
     telegram: {
-        botToken: getEnvvar('BOT_TOKEN'),
-        botTitle: 'Hyperliquid Bot',
-        botDescription: 'A bot to monitor Hyperliquid trades',
-        botCommands: {
-            start: 'Start monitoring',
-            stop: 'Stop monitoring'
-        },
-        targetGroupID: parseInt(getEnvvar('TARGET_GROUP_ID'), 10),
-        targetMainTopicID: parseInt(getEnvvar('TARGET_MAIN_TOPIC_ID'), 10),
-        targetOtherTopicID: parseInt(getEnvvar('TARGET_OTHER_TOPIC_ID'), 10),
-        targetTrackTopicID: parseInt(getEnvvar('TARGET_TRACK_TOPIC_ID'), 10),
-        targetStakeTopicID: parseInt(getEnvvar('TARGET_STAKE_TOPIC_ID'), 10),
-        ownerUserID: parseInt(getEnvvar('OWNER_USER_ID'), 10)
+        botToken: requireEnv('BOT_TOKEN'),
+        chatID: parseInt(requireEnv('CHAT_ID'), 10),
+        hsMainTopicID: parseInt(requireEnv('HS_MAIN_TOPIC_ID'), 10),
+        hsOtherTopicID: parseInt(requireEnv('HS_OTHER_TOPIC_ID'), 10),
+        stakeTopicID: parseInt(requireEnv('STAKE_TOPIC_ID'), 10),
+        trackTopicID: parseInt(requireEnv('TRACK_TOPIC_ID'), 10),
+        polyTopicID: parseInt(requireEnv('POLY_TOPIC_ID'), 10),
+        ownerUserID: parseInt(requireEnv('OWNER_USER_ID'), 10)
     },
     monitor: {
-        autostart: getEnvvar('MONITOR_AUTOSTART', 'true') === 'true',
-        cacheTtlMs: 5 * 60 * 1000, // 5 minutes,
+        cacheTTLMs: 5 * 60 * 1000, // 5 minutes,
         intervalMs: 30 * 1000, // 30 secondss
         cleanupIntervalMs: 60 * 60 * 1000, // 1 hour
         noDataTimeoutMs: 5 * 60 * 1000 // 5 minutes
     },
     hyperliquid: {
+        minSuspiciousNotionalUSD: parseFloat(optionalEnv('HS_MIN_NOTIONAL_USD', '100000')),
+        aggregationWindowMs: parseInt(optionalEnv('HS_AGGREGATION_WINDOW_MS', String(24 * 60 * 60 * 1000)), 10),
+        posChangeAlertPercent: parseFloat(optionalEnv('HS_POS_CHANGE_ALERT_PERCENT', '10')),
+        mainCoins: ['BTC', 'ETH', 'SOL'] as string[],
+        batchSize: 1000,
+        wss: 'wss://api.hyperliquid.xyz/ws',
+        api: 'https://api.hyperliquid.xyz/info',
+        explorer: 'https://hypurrscan.io/address',
         freshWindowMs: 2 * 24 * 60 * 60 * 1000, // 2 days,
-        trackCheckIntervalMs: 30 * 60 * 1000, // 30 minutes
-        minSuspiciousNotionalUSD: parseFloat(getEnvvar('MIN_NOTIONAL_USD', '100000')),
-        aggregationWindowMs: parseInt(getEnvvar('AGGREGATION_WINDOW_MS', String(24 * 60 * 60 * 1000)), 10),
-        mainCoins: ['BTC', 'ETH', 'SOL'],
-        posChangeAlertPercent: 10, // 10%
-        tradeBatchSize: parseInt(getEnvvar('TRADE_BUFFER_SIZE', '1000'), 10),
-        tradeBatchFlushIntervalMs: 60 * 1000, // 1 minute
+        checkIntervalMs: 30 * 60 * 1000, // 30 minutes
+        batchFlushIntervalMs: 60 * 1000, // 1 minute
         cleanupTTLms: 3 * 24 * 60 * 60 * 1000 // 72 hours
     },
     stake: {
+        minAlertBetUSD: parseFloat(optionalEnv('STAKE_MIN_BET_USD', '10000')),
         url: 'https://stake.com',
         api: 'https://stake.com/_api/graphql',
         wss: 'wss://stake.com/_api/websockets',
-        minAlertBetUSD: parseFloat(getEnvvar('MIN_STAKE_USD', '10000')),
-        userAgent:
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36',
-        betsBatchSize: parseInt(getEnvvar('STAKE_BET_BUFFER_SIZE', '25'), 10),
-        betsBatchFlushIntervalMs: 30 * 1000, // 30 seconds
+        batchSize: 30,
+        batchFlushIntervalMs: 30 * 1000, // 30 seconds
         cleanupTTLms: 24 * 60 * 60 * 1000, // 24 hours
         alertAgeMs: 5 * 60 * 1000 // 5 minutes
     },
+    polymarket: {
+        alertThresholdUsd: Number(optionalEnv('POLY_ALERT_THRESHOLD_USD', '100000')),
+        sportAlertThresholdUsd: Number(optionalEnv('POLY_SPORT_BET_ALERT_THRESHOLD_USD', '500000')),
+        reAlertThresholdPercent: Number(optionalEnv('POLY_RE_ALERT_THRESHOLD_PERCENT', '20')),
+        maxPriceFilter: Number(optionalEnv('POLY_MAX_PRICE_FILTER', '0.95')),
+        screenshotEnabled: optionalEnv('POLY_SCREENSHOT_ENABLED', 'true') === 'true',
+        wss: 'wss://ws-live-data.polymarket.com',
+        dataApi: 'https://data-api.polymarket.com',
+        gammaApi: 'https://gamma-api.polymarket.com',
+        minTradeUSD: 50,
+        dataApiRateLimit: 5,
+        gammaApiRateLimit: 2,
+        minimalGrowthPercent: 20,
+        minimalGrowthUSD: 9000,
+        batchFlushIntervalMs: 10 * 1000, // 2 seconds
+        cleanupTTLms: 7 * 24 * 60 * 60 * 1000 // 7 days
+    },
     db: {
-        mongodbURI: getEnvvar('MONGODB_URI', 'mongodb://root:example@localhost:27017') as string,
-        dbName: getEnvvar('DB_NAME', 'hyper-bot') as string,
-        redisURL: getEnvvar('REDIS_URL', 'redis://localhost:6379') as string,
-        redisPassword: process.env.REDIS_PASSWORD || undefined
+        mongodbURI: optionalEnv('MONGODB_URI', 'mongodb://root:example@localhost:27017') as string,
+        dbName: optionalEnv('DB_NAME', 'whale-tracker-bot') as string,
+        redisURL: optionalEnv('REDIS_URL', 'redis://localhost:6379') as string,
+        redisPassword: optionalEnv('REDIS_PASSWORD', '') as string
+    },
+    puppeteer: {
+        userAgent:
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36'
     }
-};
+} as const;

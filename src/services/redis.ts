@@ -1,6 +1,8 @@
 import { createClient } from 'redis';
 import { config } from '../config';
-import * as common from '../common';
+import Logger from '../common/logger';
+
+const logger = new Logger('redis');
 
 const redis = createClient({
     url: config.db.redisURL,
@@ -14,13 +16,13 @@ export function getRedisClient() {
 export async function connectRedis() {
     try {
         redis.on('error', (err) => {
-            common.logError(`Redis Client Error: ${err}`);
+            logger.error(`Redis Client Error: ${err}`);
             process.exit(1);
         });
         await redis.connect();
-        common.logInfo('Connected to Redis');
+        logger.info('Connected to Redis');
     } catch (error) {
-        common.logError(`Redis connection error: ${error}`);
+        logger.error(`Redis connection error: ${error}`);
         process.exit(1);
     }
 }
@@ -28,8 +30,8 @@ export async function connectRedis() {
 export async function closeRedis() {
     try {
         await redis.quit();
-        common.logInfo('Redis connection closed');
+        logger.info('Redis connection closed');
     } catch (error) {
-        common.logError(`Error closing Redis connection: ${error}`);
+        logger.error(`Error closing Redis connection: ${error}`);
     }
 }

@@ -1,6 +1,5 @@
 import puppeteer, { Browser, Page } from 'puppeteer';
-import * as common from '../common';
-import { config } from '../config';
+import { config } from '../../config';
 import DBService, {
     BetOutcome,
     BetType,
@@ -9,10 +8,10 @@ import DBService, {
     StakeBetDocument,
     StakeBetRecord,
     SwishBetOutcome
-} from './db';
-import { Tracker } from '../common/tracker';
+} from '../db/stake';
+import { Tracker } from '../../common/tracker';
 import { InlineKeyboardMarkup } from 'telegraf/types';
-import { Mutex } from '../common/mutex';
+import { capitalize, formatCurrency, sleep } from '../../common/utils';
 
 interface Payload {
     type: string;
@@ -163,12 +162,11 @@ export default class StakeService extends Tracker {
     private browser: Browser | null = null;
     private betsBatch: Partial<StakeBetDocument>[] = [];
     private betsBatchInterval?: NodeJS.Timeout;
-    private flushMutex = new Mutex();
 
     async start(): Promise<void> {
         if (this.monitoring) return;
         this.monitoring = true;
-        common.logInfo('StakeServivce monitoring started');
+        this.logger.info('StakeServivce monitoring started');
 
         try {
             this.browser = await puppeteer.launch({
@@ -181,23 +179,21 @@ export default class StakeService extends Tracker {
                 ]
             });
             this.page = await this.browser.newPage();
-            await this.page.setUserAgent({ userAgent: config.stake.userAgent });
+            await this.page.setUserAgent({ userAgent: config.puppeteer.userAgent });
             await this.page.goto(config.stake.url, { waitUntil: 'networkidle2' });
-            common.logInfo('StakeService Puppeteer initialized');
-            await common.sleep(60000);
+            this.logger.info('Puppeteer initialized');
+            await sleep(10000);
         } catch (error) {
             this.monitoring = false;
             this.page = null;
-            common.logError(`StakeService.start: error initializing Puppeteer: ${error}`);
-            this.bot.telegram.sendMessage(config.telegram.targetGroupID, 'Unable to start stake monitoring.');
+            this.logger.error(`Error initializing Puppeteer: ${error}`);
+            this.tg.sendMessage(config.telegram.chatID, 'Unable to start stake monitoring.');
             return;
         }
 
         this.betsBatchInterval = setInterval(() => {
-            this.flushBetsBatch().catch((error) =>
-                common.logError(`StakeService.betsBatchInterval: error flushing bets batch: ${error}`)
-            );
-        }, config.stake.betsBatchFlushIntervalMs);
+            this.flushBetsBatch().catch((error) => this.logger.error(`Error flushing bets batch: ${error}`));
+        }, config.stake.batchFlushIntervalMs);
 
         await this.page.exposeFunction('onWSMessage', this.handleMessage.bind(this));
         await this.subscribeBets();
@@ -207,11 +203,9 @@ export default class StakeService extends Tracker {
     async stop(): Promise<void> {
         if (!this.monitoring) return;
         this.monitoring = false;
-        await this.monitorTask?.catch((error) =>
-            common.logError(`StakeService.stop: error while awaiting monitor task: ${error}`)
-        );
+        await this.monitorTask?.catch((error) => this.logger.error(`Error while awaiting monitor task: ${error}`));
         this.monitorTask = undefined;
-        common.logInfo('StakeService monitoring stopped');
+        this.logger.info('Monitoring stopped');
         if (this.page) this.page.close();
         if (this.browser) this.browser.close();
         if (this.betsBatchInterval) clearInterval(this.betsBatchInterval);
@@ -225,7 +219,7 @@ export default class StakeService extends Tracker {
                 try {
                     await this.scanAndAlert();
                 } catch (error) {
-                    common.logError(`StakeService.mainLoop alerting: ${error}`);
+                    this.logger.error(`Error in scanAndAlert: ${error}`);
                 }
                 if (!this.monitoring) break;
                 await this.cancellableSleep(config.monitor.intervalMs);
@@ -237,7 +231,7 @@ export default class StakeService extends Tracker {
                 try {
                     await DBService.cleanBets(config.stake.cleanupTTLms);
                 } catch (error) {
-                    common.logError(`TradeService.mainLoop cleanup: ${error}`);
+                    this.logger.error(`TradeService.mainLoop cleanup: ${error}`);
                 }
                 if (!this.monitoring) break;
                 await this.cancellableSleep(config.monitor.cleanupIntervalMs);
@@ -249,26 +243,25 @@ export default class StakeService extends Tracker {
     private async scanAndAlert(): Promise<void> {
         const candidates = await DBService.getStakeBetsToAlert(config.stake.minAlertBetUSD, config.stake.alertAgeMs);
 
-        common.logInfo(`StakeService.scanAndAlert: Found ${candidates.length} candidates needing alert`);
+        this.logger.info(`Found ${candidates.length} candidates needing alert`);
         for (const candidate of candidates) {
             try {
                 await this.processAlertCandidate(candidate);
             } catch (error) {
-                common.logError(`StakeService.scanAndAlert: Failed to alert bet ${candidate.iid}: ${error}`);
+                this.logger.error(`Failed to alert bet ${candidate.iid}: ${error}`);
             }
         }
     }
 
     private async processAlertCandidate(candidate: StakeBetRecord): Promise<void> {
-        common.logInfo(
-            `StakeService: Sending alert for high-value bet: IID ${candidate.iid} ${common.formatCurrency(candidate.amountUSD)}`
+        this.logger.info(
+            `Sending alert for high-value bet: IID ${candidate.iid} ${formatCurrency(candidate.amountUSD)}`
         );
         const result = this.formatAlertMessage(candidate);
         if (!result) return;
         const { msg, buttons } = result;
-        await this.bot.telegram.sendMessage(config.telegram.targetGroupID, msg, {
-            parse_mode: 'HTML',
-            message_thread_id: config.telegram.targetStakeTopicID,
+        await this.tg.sendMessage(config.telegram.chatID, msg, {
+            message_thread_id: config.telegram.stakeTopicID,
             reply_markup: buttons
         });
 
@@ -284,7 +277,7 @@ export default class StakeService extends Tracker {
                     lines.push(`Sport: ${outcome.event.sport}`);
                     lines.push(`Competitor: ${outcome.event.competitor}`);
                     lines.push(
-                        `${common.capitalize(outcome.event.lineType)} ${outcome.event.lineValue} - ${outcome.event.lineName}`
+                        `${capitalize(outcome.event.lineType)} ${outcome.event.lineValue} - ${outcome.event.lineName}`
                     );
                     lines.push(`Odds: ${outcome.odds.toFixed(2)}`);
                     lines.push('');
@@ -294,7 +287,7 @@ export default class StakeService extends Tracker {
                 for (const outcome of outcomes as SportBetOutcome[]) {
                     lines.push(`${outcome.event.live ? '🔴 LIVE' : '⏱️ PREMATCH'}`);
                     lines.push(`<b>${outcome.event.name} (${outcome.event.abbreviation})</b>`);
-                    lines.push(`Sport: ${common.capitalize(outcome.event.sport)}`);
+                    lines.push(`Sport: ${capitalize(outcome.event.sport)}`);
                     lines.push(`Outcome: ${outcome.event.outcome} (${outcome.event.market})`);
                     lines.push('');
                 }
@@ -302,7 +295,7 @@ export default class StakeService extends Tracker {
             case 'RacingBet':
                 for (const outcome of outcomes as RacingBetOutcome[]) {
                     lines.push(`${outcome.event.live ? '🔴 LIVE' : '⏱️ PREMATCH'}`);
-                    lines.push(`Sport: ${common.capitalize(outcome.event.sport)}`);
+                    lines.push(`Sport: ${capitalize(outcome.event.sport)}`);
                     lines.push(`Venue: ${outcome.event.venue}`);
                     lines.push(`Runners:`);
                     for (const runner of outcome.event.runners) {
@@ -325,9 +318,9 @@ export default class StakeService extends Tracker {
         msg: string;
         buttons: InlineKeyboardMarkup;
     } | null {
-        const amount = common.formatCurrency(candidate.amountUSD);
+        const amount = formatCurrency(candidate.amountUSD);
         const multiplier = candidate.potentialMultiplier || 0;
-        const potentialWin = common.formatCurrency(multiplier * candidate.amountUSD);
+        const potentialWin = formatCurrency(multiplier * candidate.amountUSD);
         const eventDetails = this.getEventDetails(candidate.type, candidate.outcomes);
         const header = candidate.amountUSD >= 250_000 ? '🚀 <b>HUGE BET</b> 🚀' : '💎 <b>HIGHROLLER</b> 💎';
 
@@ -349,7 +342,7 @@ export default class StakeService extends Tracker {
                     [
                         {
                             text: '🔗 View on Stake.com',
-                            url: `https://stake.com/sports/home?iid=${candidate.iid}&modal=bet`
+                            url: `${config.stake.url}/sports/home?iid=${candidate.iid}&modal=bet`
                         }
                     ]
                 ]
@@ -392,7 +385,7 @@ export default class StakeService extends Tracker {
             if (!usd) continue;
             rateMap.set(currency.name, usd.rate);
         }
-        await this.redis.setEx(this.stakeCurrenciesKey, config.monitor.cacheTtlMs / 1000, JSON.stringify([...rateMap]));
+        await this.redis.setEx(this.stakeCurrenciesKey, config.monitor.cacheTTLMs / 1000, JSON.stringify([...rateMap]));
         return rateMap;
     }
 
@@ -448,7 +441,7 @@ export default class StakeService extends Tracker {
                     manager[wsKey] = ws;
 
                     ws.onopen = () => {
-                        log(`Stake WebSocket (${name}) connected`, 'info');
+                        log(`WebSocket (${name}) connected`, 'info');
                         ws.send(JSON.stringify(startPayload));
                         manager[intervalKey] = setInterval(() => {
                             if (ws.readyState === WebSocket.OPEN) {
@@ -460,16 +453,23 @@ export default class StakeService extends Tracker {
                     ws.onmessage = (event) => {
                         const data = JSON.parse(event.data);
                         if (data.type === 'connection_ack') {
-                            log(`Stake WebSocket (${name}) connection acknowledged`, 'info');
+                            log(`WebSocket (${name}) connection acknowledged`, 'info');
                             ws.send(JSON.stringify(subscriptionPayload));
+                            return;
+                        }
+                        if (data.type === 'ping') {
+                            ws.send(JSON.stringify({ type: 'pong' }));
+                            return;
+                        }
+                        if (data.type === 'pong') {
                             return;
                         }
                         (window as any).onWSMessage(event.data);
                     };
 
-                    ws.onerror = (err) => log(`Stake WebSocket (${name}) error: ${err}`, 'error');
+                    ws.onerror = (err) => log(`WebSocket (${name}) error: ${err}`, 'error');
                     ws.onclose = () => {
-                        log(`Stake WebSocket (${name}) closed. Reconnecting...`, 'warn');
+                        log(`WebSocket (${name}) closed. Reconnecting...`, 'warn');
                         if (manager[intervalKey]) {
                             clearInterval(manager[intervalKey]);
                             manager[intervalKey] = null;
@@ -506,16 +506,16 @@ export default class StakeService extends Tracker {
         if (!log.type || log.type !== 'log' || !log.message) return;
         switch (log.level) {
             case 'info':
-                common.logInfo(`StakeService: ${log.message}`);
+                this.logger.info(`${log.message}`);
                 break;
             case 'warn':
-                common.logWarn(`StakeService: ${log.message}`);
+                this.logger.warn(`${log.message}`);
                 break;
             case 'error':
-                common.logError(`StakeService: ${log.message}`);
+                this.logger.error(`${log.message}`);
                 break;
             default:
-                common.logInfo(`StakeService: ${log.message}`);
+                this.logger.info(`${log.message}`);
         }
     }
 
@@ -613,17 +613,17 @@ export default class StakeService extends Tracker {
                 outcomes
             });
             if (amountUSD >= 1000)
-                common.logInfo(
-                    `StakeService: Detected high-value bet: IID ${betData.iid} ${common.formatCurrency(amountUSD)} (${source})`
+                this.logger.info(
+                    `Detected high-value bet: IID ${betData.iid} ${formatCurrency(amountUSD)} (${source})`
                 );
         } catch (err) {
-            common.logError(`StakeService.parseMessage: error parsing message: ${err}`);
+            this.logger.error(`Error parsing message: ${err}`);
         }
     }
 
     private async handleBet(bet: Partial<StakeBetDocument>): Promise<void> {
         this.betsBatch.push(bet);
-        if (this.betsBatch.length >= config.stake.betsBatchSize) this.flushBetsBatch();
+        if (this.betsBatch.length >= config.stake.batchSize) this.flushBetsBatch();
     }
 
     private async flushBetsBatch(): Promise<void> {
@@ -642,10 +642,10 @@ export default class StakeService extends Tracker {
             if (uniqueBets.length === 0) return;
 
             try {
-                common.logInfo(`StakeService.flushBetsBatch: Flushing bets batch of size ${uniqueBets.length}`);
+                this.logger.info(`Flushing bets batch of size ${uniqueBets.length}`);
                 await DBService.addStakeBetsBulk(uniqueBets);
             } catch (error) {
-                common.logError(`StakeService.flushBetsBatch: error flushing bets batch: ${error}`);
+                this.logger.error(`Error flushing bets batch: ${error}`);
             }
         });
     }

@@ -1,60 +1,27 @@
-import { Context, Telegraf } from 'telegraf';
-import { config } from './config';
-import * as common from './common';
-import { connectDB, closeDB, TradeDirection } from './services/db';
-import TradeService from './services/trade';
-import StakeService from './services/stake';
+import Logger from './common/logger';
+import { connectDB, closeDB } from './services/db';
+import { HyperliquidService, StakeService, PolymarketService } from './services/trackers';
+import Tg from './services/telegram';
 import { closeRedis, connectRedis } from './services/redis';
 import { Tracker } from './common/tracker';
+import { config } from './config';
+import * as utils from './common/utils';
+import { HyperTradeDirection } from './services/db';
+import { Context } from 'telegraf';
 
-const bot = new Telegraf(config.telegram.botToken);
-const tradeService = new TradeService(bot);
-const stakeService = new StakeService(bot);
-const services: Tracker[] = [tradeService, stakeService];
+const logger = new Logger('main');
+const telegram: Tg = new Tg();
+const hl = new HyperliquidService(telegram);
+const stake = new StakeService(telegram);
+const poly = new PolymarketService(telegram);
+const services: Tracker[] = [hl, stake, poly];
 
-async function checkMessageSource(ctx: Context, requireOwner: boolean): Promise<boolean> {
-    if (!ctx.chat || !ctx.from) {
-        await ctx.reply('Unable to determine chat or user information.');
-        return false;
-    }
-    if (ctx.chat.type === 'private') {
-        await ctx.reply('The bot is only available in the group.');
-        return false;
-    }
-    if (ctx.chat.id !== config.telegram.targetGroupID) {
-        await ctx.reply('This command can only be used in the target group.');
-        return false;
-    }
-    const member = await bot.telegram.getChatMember(ctx.chat.id, ctx.from.id);
-    if (member.status !== 'administrator' && member.status !== 'creator') {
-        if (!config.telegram.ownerUserID || ctx.from.id !== config.telegram.ownerUserID) {
-            await ctx.reply('Only group administrators can control monitoring.');
-            return false;
-        }
-    }
-    if (requireOwner && ctx.from.id !== config.telegram.ownerUserID) {
-        await ctx.reply('Only the bot owner can control monitoring.');
-        return false;
-    }
-    return true;
-}
-
-async function ensureBotReady(): Promise<void> {
-    const botInfo = await bot.telegram.getMe();
-    const member = await bot.telegram.getChatMember(config.telegram.targetGroupID, botInfo.id);
-    if (member.status !== 'administrator' && member.status !== 'creator') {
-        throw new Error(`The bot is not an administrator in group ${config.telegram.targetGroupID}`);
-    }
-    const chat = await bot.telegram.getChat(config.telegram.targetGroupID);
-    if (chat.type !== 'supergroup') {
-        throw new Error(`The target chat ${config.telegram.targetGroupID} is not a supergroup`);
-    }
-}
+let keepAlive: NodeJS.Timeout;
 
 async function extractTrackData(
     ctx: (Context & { match: RegExpMatchArray | null }) | (Context & { args: string[] }),
     command: string
-): Promise<{ wallet: string; coin: string; direction: TradeDirection } | null> {
+): Promise<{ wallet: string; coin: string; direction: HyperTradeDirection } | null> {
     let direction: string;
     let coin: string;
     let wallet: string;
@@ -81,11 +48,11 @@ async function extractTrackData(
         return null;
     }
 
-    if (!common.isValidHyperliquidAddress(wallet)) {
+    if (!utils.isValidHyperliquidAddress(wallet)) {
         await ctx.reply(`Invalid Hyperliquid wallet address: '${wallet}'`);
         return null;
     }
-    if (!common.isValidCoinSymbol(coin)) {
+    if (!utils.isValidCoinSymbol(coin)) {
         await ctx.reply(`Invalid coin symbol: '${coin}'`);
         return null;
     }
@@ -93,159 +60,123 @@ async function extractTrackData(
         await ctx.reply(`Invalid order direction: '${direction}'. Use 'long' or 'short'.`);
         return null;
     }
-    return { wallet, coin, direction: direction as TradeDirection };
+    return { wallet, coin, direction: direction as HyperTradeDirection };
 }
 
-function registerHandlers(): void {
-    bot.command('start', async (ctx) => {
-        if (!(await checkMessageSource(ctx, true))) return;
-        if (serviceActive()) {
-            await ctx.reply('Monitoring is already running.');
-            return;
-        }
-        common.logInfo(`Starting monitoring.`);
-        if (ctx) await ctx.reply('Monitoring started.');
-        startMonitoringServices();
-    });
-
-    bot.command('stop', async (ctx) => {
-        if (!(await checkMessageSource(ctx, true))) return;
-        if (!serviceActive()) {
-            await ctx.reply('Monitoring is not running.');
-            return;
-        }
-        common.logInfo('Monitoring stopped.');
-        stopMonitoringServices();
-    });
-
+telegram.registerHandlers((bot) => {
     bot.command('stats', async (ctx) => {
-        if (!(await checkMessageSource(ctx, false))) return;
+        if (!(await telegram.checkMessageSource(ctx, false))) return;
         const args = ctx.args;
         if (args.length !== 1) {
             await ctx.reply('Usage: /stats <coin>');
             return;
         }
         const coin = args[0].toUpperCase();
-        if (!common.isValidCoinSymbol(coin)) {
+        if (!utils.isValidCoinSymbol(coin)) {
             await ctx.reply(`Invalid coin symbol: '${coin}'`);
             return;
         }
-        const msg = await tradeService.getCoinStats(coin);
+        const msg = await hl.getCoinStats(coin);
         await ctx.reply(msg, { parse_mode: 'HTML' });
     });
 
     bot.command('tracked', async (ctx) => {
-        if (!(await checkMessageSource(ctx, false))) return;
-        const msg = await tradeService.listTracked();
+        if (!(await telegram.checkMessageSource(ctx, false))) return;
+        const msg = await hl.listTracked();
         await ctx.reply(msg, { parse_mode: 'HTML' });
     });
 
     bot.command('untrack', async (ctx) => {
-        if (!(await checkMessageSource(ctx, false))) return;
+        if (!(await telegram.checkMessageSource(ctx, false))) return;
         const trackData = await extractTrackData(ctx, 'untrack');
         if (!trackData) return;
         const { wallet, coin, direction } = trackData;
-        const msg = await tradeService.untrack(wallet, coin, direction as TradeDirection);
+        const msg = await hl.untrack(wallet, coin, direction as HyperTradeDirection);
         await ctx.reply(msg, { parse_mode: 'HTML' });
     });
 
     bot.command('track', async (ctx) => {
-        if (!(await checkMessageSource(ctx, false))) return;
+        if (!(await telegram.checkMessageSource(ctx, false))) return;
         const trackData = await extractTrackData(ctx, 'track');
         if (!trackData) return;
         const { wallet, coin, direction } = trackData;
-        const msg = await tradeService.track(wallet, coin, direction as TradeDirection);
+        const msg = await hl.track(wallet, coin, direction as HyperTradeDirection);
         await ctx.reply(msg, { parse_mode: 'HTML' });
     });
 
     bot.action(/^track:(.+)$/, async (ctx) => {
-        if (!(await checkMessageSource(ctx, false))) return;
+        if (!(await telegram.checkMessageSource(ctx, false))) return;
         if (!ctx.match || ctx.match.length !== 2) {
             await ctx.answerCbQuery('Invalid untrack command format.');
             return;
         }
-        const { msg, buttons } = await tradeService.trackById(ctx.match[1]);
+        const { msg, buttons } = await hl.trackById(ctx.match[1]);
         await ctx.answerCbQuery();
         await ctx.reply(msg, { parse_mode: 'HTML' });
-
         if (buttons) await ctx.editMessageReplyMarkup(buttons);
-
-        await bot.telegram.sendMessage(config.telegram.targetGroupID, msg, {
-            parse_mode: 'HTML',
-            message_thread_id: config.telegram.targetTrackTopicID
-        });
+        await telegram.sendMessage(config.telegram.chatID, msg, { message_thread_id: config.telegram.trackTopicID });
     });
 
     bot.action(/^untrack:(.+)$/, async (ctx) => {
-        if (!(await checkMessageSource(ctx, false))) return;
+        if (!(await telegram.checkMessageSource(ctx, false))) return;
         if (!ctx.match || ctx.match.length !== 2) {
             await ctx.answerCbQuery('Invalid untrack command format.');
             return;
         }
-        const { msg, buttons } = await tradeService.untrackById(ctx.match[1]);
+        const { msg, buttons } = await hl.untrackById(ctx.match[1]);
         await ctx.answerCbQuery(msg);
         await ctx.reply(msg, { parse_mode: 'HTML' });
         if (buttons) await ctx.editMessageReplyMarkup(buttons);
     });
-}
+});
 
 function startMonitoringServices(): void {
     for (const service of services) {
-        common.logInfo(`Auto-starting service: ${service.constructor.name}`);
+        logger.info(`Auto-starting service: ${service.constructor.name}`);
         void service.start();
     }
 }
 
 function stopMonitoringServices(): void {
     for (const service of services) {
-        common.logInfo(`Stopping service: ${service.constructor.name}`);
+        logger.info(`Stopping service: ${service.constructor.name}`);
         void service.stop();
     }
 }
 
-function serviceActive(): boolean {
-    for (const service of services) {
-        if (service.isActive()) {
-            return true;
-        }
-    }
-    return false;
-}
-
 function shutdown(code: number): void {
-    try {
-        bot.stop();
-    } catch { }
-
     void closeDB();
     void closeRedis();
-    stopMonitoringServices();
-    setTimeout(() => process.exit(code), 500);
+    void stopMonitoringServices();
+    void telegram.stop();
+    if (keepAlive) clearInterval(keepAlive);
+    logger.info('Shutdown complete.');
+    process.exit(code);
 }
 
 async function main(): Promise<void> {
     await connectDB();
     await connectRedis();
+    void telegram.start(
+        () => {
+            logger.info('Telegram bot started successfully.');
+        },
+        (err) => {
+            logger.error(`Telegram bot error: ${err}`);
+            shutdown(1);
+        }
+    );
 
-    registerHandlers();
-    await ensureBotReady();
+    logger.info('Starting monitoring services.');
+    startMonitoringServices();
 
-    if (config.monitor.autostart) {
-        common.logInfo('Auto-starting monitoring services.');
-        startMonitoringServices();
-    }
-
-    await bot.launch(() => common.logInfo('Bot started'));
+    keepAlive = setInterval(() => {}, 60_000);
 
     process.once('SIGINT', () => shutdown(0));
     process.once('SIGTERM', () => shutdown(0));
-    bot.catch((err) => {
-        common.logError(`Bot error: ${err}`);
-        shutdown(1);
-    });
 }
 
 main().catch((error) => {
-    common.logError(`Fatal error during startup: ${error}`);
+    logger.error(`Fatal error during startup: ${error}`);
     shutdown(1);
 });
