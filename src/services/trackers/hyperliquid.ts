@@ -7,9 +7,36 @@ import HyperliquidDBService, {
     HyperAggregationRecord,
     HyperTrackedRecord,
     HyperTradeDirection,
-    HyperTradeRecord
+    HyperTradeRecord,
+    PositionKey
 } from '../db/hyperliquid';
-import HyperliquidAPI, { AssetPosition, TraderState } from '../api/hyperliquid';
+import HyperliquidAPI, { AssetPosition, PortfolioResponse, TraderState } from '../api/hyperliquid';
+
+type AccountTag = 'FRESH' | 'DORMANT' | 'SMALL' | 'MEDIUM' | 'LARGE';
+
+function getPortfolioTimestamps(portfolio: PortfolioResponse): { first: number | null; last: number | null } {
+    const buckets = portfolio.filter(([label]) => label === 'perpAllTime' || label === 'allTime');
+    for (const [, stats] of buckets) {
+        const history = stats?.accountValueHistory ?? [];
+        if (history.length > 2) {
+            return { first: history[0][0], last: history[history.length - 1][0] };
+        }
+    }
+    return { first: null, last: null };
+}
+
+function classifyAccountTag(
+    accountValue: number,
+    firstTimestamp: number | null,
+    lastTimestamp: number | null
+): AccountTag {
+    const now = Date.now();
+    if (firstTimestamp !== null && now - firstTimestamp < 7 * 24 * 60 * 60 * 1000) return 'FRESH';
+    if (lastTimestamp !== null && now - lastTimestamp > 10 * 24 * 60 * 60 * 1000) return 'DORMANT';
+    if (accountValue < 10_000) return 'SMALL';
+    if (accountValue <= 100_000) return 'MEDIUM';
+    return 'LARGE';
+}
 
 interface WsTrade {
     coin: string;
@@ -30,6 +57,7 @@ interface AlertContext {
     positionState: AssetPosition;
     lastTradeTime: number;
     state: TraderState;
+    accountTag: AccountTag;
 }
 
 export default class HyperliquidService extends Tracker {
@@ -42,6 +70,7 @@ export default class HyperliquidService extends Tracker {
     private reconnecting = false;
     private tradeBatch: HyperTradeRecord[] = [];
     private batchInterval?: NodeJS.Timeout;
+    private affectedKeys = new Map<string, PositionKey>();
 
     async start(): Promise<void> {
         if (this.monitoring) return;
@@ -72,6 +101,7 @@ export default class HyperliquidService extends Tracker {
         this.monitorTask = undefined;
         this.logger.info('Monitoring stopped');
 
+        this.affectedKeys.clear();
         if (this.pingInterval) {
             clearInterval(this.pingInterval);
             this.pingInterval = null;
@@ -264,7 +294,16 @@ export default class HyperliquidService extends Tracker {
     }
 
     private async scanAndAlert(): Promise<void> {
+        if (this.affectedKeys.size === 0) {
+            this.logger.info('No affected positions to scan');
+            return;
+        }
+
+        const keysToScan = Array.from(this.affectedKeys.values());
+        this.affectedKeys.clear();
+
         const candidates = await HyperliquidDBService.getTradesToAlert(
+            keysToScan,
             config.hyperliquid.minSuspiciousNotionalUSD,
             config.hyperliquid.aggregationWindowMs
         );
@@ -333,8 +372,8 @@ export default class HyperliquidService extends Tracker {
         }
 
         const currentNotional = Math.abs(currentSzi) * parseFloat(currentPosition.position.entryPx || '0');
-        const increaseThreshold = tracked.totalNotional * (1 + config.hyperliquid.posChangeAlertPercent / 100);
-        const decreaseThreshold = tracked.totalNotional * (1 - config.hyperliquid.posChangeAlertPercent / 100);
+        const increaseThreshold = tracked.totalNotional * (1 + config.hyperliquid.minimalGrowthPercent / 100);
+        const decreaseThreshold = tracked.totalNotional * (1 - config.hyperliquid.minimalGrowthPercent / 100);
         if (currentNotional > increaseThreshold || currentNotional < decreaseThreshold) {
             await this.sendPositionChangedMessage(tracked.id, tracked.wallet, tracked.coin, tracked.direction, 'size', {
                 previousNotional: tracked.totalNotional,
@@ -360,56 +399,77 @@ export default class HyperliquidService extends Tracker {
     }
 
     private async processAlertCandidate(candidate: HyperAggregationRecord): Promise<void> {
-        this.logger.info(
+        this.logger.debug(
             `Detected high-value trade: ${candidate.wallet} ${candidate.coin} ${formatCurrency(candidate.totalNotional)} (${candidate.direction})`
         );
         const portfolio = await this.api.fetchPortfolio(candidate.wallet);
         if (!portfolio) return;
-        if (!this.api.isFreshWallet(portfolio)) {
-            this.logger.info(
-                `Skipping alert for high-value trade (not fresh wallet): ${candidate.wallet} ${candidate.coin} ${formatCurrency(candidate.totalNotional)} (${candidate.direction})`
-            );
-            await HyperliquidDBService.markTradeAlerted(
-                candidate.wallet,
-                candidate.coin,
-                candidate.dateKey,
-                candidate.direction
-            );
-            return;
-        }
 
-        const state = await await this.api.fetchTraderStats(candidate.wallet);
+        const state = await this.api.fetchTraderStats(candidate.wallet);
         if (!state) return;
         const positionState = state.assetPositions?.find((pos) => pos.position?.coin === candidate.coin);
         if (!positionState || !positionState.position) {
-            this.logger.info(
+            this.logger.debug(
                 `Skipping alert for high-value trade (no position found): ${candidate.wallet} ${candidate.coin} ${formatCurrency(candidate.totalNotional)} (${candidate.direction})`
-            );
-            await HyperliquidDBService.markTradeAlerted(
-                candidate.wallet,
-                candidate.coin,
-                candidate.dateKey,
-                candidate.direction
             );
             return;
         }
         const direction: HyperTradeDirection = parseFloat(positionState.position.szi) > 0 ? 'long' : 'short';
         if (direction !== candidate.direction) {
-            this.logger.info(
+            this.logger.debug(
                 `Skipping alert for high-value trade (direction mismatch): ${candidate.wallet} ${candidate.coin} ${formatCurrency(candidate.totalNotional)} (${candidate.direction})`
             );
-            await HyperliquidDBService.markTradeAlerted(
-                candidate.wallet,
-                candidate.coin,
-                candidate.dateKey,
-                candidate.direction
+            return;
+        }
+
+        const lastAlert = await HyperliquidDBService.getLastAlert(
+            candidate.wallet,
+            candidate.coin,
+            candidate.direction
+        );
+        if (lastAlert) {
+            const growth = candidate.totalNotional - lastAlert.totalNotional;
+            const dynamicThreshold = Math.max(
+                (lastAlert.totalNotional * config.hyperliquid.minimalGrowthPercent) / 100,
+                config.hyperliquid.minimalGrowthUSD
             );
+            if (growth < dynamicThreshold) {
+                this.logger.debug(
+                    `Skipping ${candidate.wallet} ${candidate.coin} (${candidate.direction}): growth ${growth} < dynamicThreshold ${dynamicThreshold}`
+                );
+                return;
+            }
+
+            this.logger.info(
+                `Position growth detected for ${candidate.wallet} ${candidate.coin} (${candidate.direction}): growth ${growth} >= dynamicThreshold ${dynamicThreshold}, sending update alert`
+            );
+            const replyText = this.formatGrowingPositionMessage(candidate.totalNotional, lastAlert.totalNotional);
+            let messageId: number | undefined = lastAlert.messageId;
+            if (lastAlert.messageId) {
+                await this.tg.sendReply(config.telegram.chatID, replyText, lastAlert.messageId);
+            } else {
+                messageId = await this.tg.sendMessage(config.telegram.chatID, replyText, {
+                    message_thread_id: config.telegram.polyTopicID
+                });
+            }
+            await HyperliquidDBService.insertAlert({
+                wallet: candidate.wallet,
+                coin: candidate.coin,
+                direction: candidate.direction,
+                totalNotional: candidate.totalNotional,
+                sentAt: new Date(),
+                messageId
+            });
             return;
         }
 
         this.logger.info(
             `Sending alert for high-value trade: ${candidate.wallet} ${candidate.coin} ${formatCurrency(candidate.totalNotional)} (${candidate.direction})`
         );
+        const accountValue = parseFloat(state.marginSummary?.accountValue || '0');
+        const { first, last } = getPortfolioTimestamps(portfolio);
+        const accountTag = classifyAccountTag(accountValue, first, last);
+
         const alertContext: AlertContext = {
             id: candidate.id,
             aggregateTotalNotional: candidate.totalNotional,
@@ -417,29 +477,34 @@ export default class HyperliquidService extends Tracker {
             aggregationWindowMs: config.hyperliquid.aggregationWindowMs,
             positionState: positionState,
             lastTradeTime: candidate.lastTradeTime,
-            state: state
+            state: state,
+            accountTag
         };
 
         const result = this.formatAlertMessage(candidate.coin, candidate.wallet, alertContext);
         if (!result) return;
         const { msg, buttons } = result;
+        let messageId: number | undefined;
+
         if (config.hyperliquid.mainCoins.includes(candidate.coin))
-            await this.tg.sendMessage(config.telegram.chatID, msg, {
+            messageId = await this.tg.sendMessage(config.telegram.chatID, msg, {
                 message_thread_id: config.telegram.hsMainTopicID,
                 reply_markup: buttons
             });
         else
-            await this.tg.sendMessage(config.telegram.chatID, msg, {
+            messageId = await this.tg.sendMessage(config.telegram.chatID, msg, {
                 message_thread_id: config.telegram.hsOtherTopicID,
                 reply_markup: buttons
             });
 
-        await HyperliquidDBService.markTradeAlerted(
-            candidate.wallet,
-            candidate.coin,
-            candidate.dateKey,
-            candidate.direction
-        );
+        await HyperliquidDBService.insertAlert({
+            wallet: candidate.wallet,
+            coin: candidate.coin,
+            direction: candidate.direction,
+            totalNotional: candidate.totalNotional,
+            sentAt: new Date(),
+            messageId
+        });
     }
 
     private reconnectWebSocket(): void {
@@ -636,7 +701,8 @@ export default class HyperliquidService extends Tracker {
             `📈 <b>Trader Profile</b> 📈`,
             `Wallet: <code>${escapeHtml(buyer)}</code>`,
             `Account Value: <code>${formatCurrency(accountValue)}</code>`,
-            `Coins Traded: ${coinsTraded}`
+            `Coins Traded: ${coinsTraded}`,
+            `<b>Account:</b> #${context.accountTag}`
         ];
         return {
             msg: lines.join('\n'),
@@ -664,6 +730,16 @@ export default class HyperliquidService extends Tracker {
             try {
                 this.logger.info(`Flushing trade batch of size ${batchToFlush.length}`);
                 await HyperliquidDBService.addTradesBulk(batchToFlush, config.hyperliquid.aggregationWindowMs);
+                for (const trade of batchToFlush) {
+                    const keyStr = `${trade.wallet}:${trade.coin}:${trade.direction}`;
+                    if (!this.affectedKeys.has(keyStr)) {
+                        this.affectedKeys.set(keyStr, {
+                            wallet: trade.wallet,
+                            coin: trade.coin,
+                            direction: trade.direction
+                        });
+                    }
+                }
             } catch (error) {
                 this.logger.error(`Error flushing trade batch: ${error}`);
             }
@@ -802,5 +878,14 @@ export default class HyperliquidService extends Tracker {
         } catch (error) {
             this.logger.error(`Failed to send position changed message: ${error}`);
         }
+    }
+
+    private formatGrowingPositionMessage(currentNotional: number, previousNotional: number): string {
+        const lines = [
+            `🔥 <b>Growing position</b>`,
+            ``,
+            `<b>${formatCurrency(currentNotional)}</b>  ⬅  ${formatCurrency(previousNotional)}`
+        ];
+        return lines.join('\n');
     }
 }

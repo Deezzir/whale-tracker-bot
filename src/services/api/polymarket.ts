@@ -49,7 +49,7 @@ const PAGE_SIZE = 100;
 const MAX_OFFSET = 3000;
 
 export default class PolymarketAPIService {
-    private gammaLimier = new RateLimiter(config.polymarket.gammaApiRateLimit);
+    private gammaLimiter = new RateLimiter(config.polymarket.gammaApiRateLimit);
     private dataLimiter = new RateLimiter(config.polymarket.dataApiRateLimit);
     private marketCacheKey = (conditionId: string) => `gamma:market:${conditionId}`;
     private walletCacheKey = (proxyWallet: string) => `gamma:wallet:${proxyWallet}`;
@@ -60,7 +60,7 @@ export default class PolymarketAPIService {
         const cached = await this.redis.get(this.marketCacheKey(conditionId));
         if (cached) return JSON.parse(cached) as Market;
 
-        await this.gammaLimier.acquire();
+        await this.gammaLimiter.acquire();
 
         try {
             const url = `${config.polymarket.gammaApi}/markets`;
@@ -96,7 +96,10 @@ export default class PolymarketAPIService {
 
     public async getFirstTradeInfo(proxyWallet: string): Promise<WalletInfo> {
         const cached = await this.redis.get(this.walletCacheKey(proxyWallet));
-        if (cached) return JSON.parse(cached) as WalletInfo;
+        if (cached) {
+            const parsed = JSON.parse(cached) as { date: string | null; nickname: string | null };
+            return { date: parsed.date ? new Date(parsed.date) : null, nickname: parsed.nickname };
+        }
 
         await this.dataLimiter.acquire();
 

@@ -14,19 +14,10 @@ interface HyperAggregationDocument extends Document {
     totalNotional: number;
     tradeCount: number;
     lastTradeTime: number;
-    lastAlertedAt?: number;
 }
 
 export type HyperAggregationRecord = Omit<HyperAggregationDocument, keyof Document> & {
     id: string;
-};
-
-export type HyperTradeRecord = {
-    wallet: string;
-    coin: string;
-    notional: number;
-    tradeTime: number;
-    direction: HyperTradeDirection;
 };
 
 const HyperAggregationSchema = new Schema<HyperAggregationDocument>(
@@ -37,13 +28,13 @@ const HyperAggregationSchema = new Schema<HyperAggregationDocument>(
         direction: { type: String, required: true, enum: ['long', 'short'] },
         totalNotional: { type: Number, default: 0 },
         tradeCount: { type: Number, default: 0 },
-        lastTradeTime: { type: Number, default: 0 },
-        lastAlertedAt: { type: Number }
+        lastTradeTime: { type: Number, default: 0 }
     },
     { timestamps: true }
 );
 
 HyperAggregationSchema.index({ wallet: 1, coin: 1, dateKey: 1, direction: 1 }, { unique: true });
+
 const HyperAggregationModel =
     mongoose.models.WalletAggregation ||
     mongoose.model<HyperAggregationDocument>('HyperAggregation', HyperAggregationSchema);
@@ -74,8 +65,52 @@ const HyperTrackedSchema = new Schema<HyperTrackedDocument>(
     { timestamps: true }
 );
 
+HyperTrackedSchema.index({ wallet: 1, coin: 1, direction: 1 }, { unique: true });
+
 const HyperTrackedModel =
     mongoose.models.WalletTracking || mongoose.model<HyperTrackedDocument>('HyperTrack', HyperTrackedSchema);
+
+interface HyperAlert {
+    wallet: string;
+    coin: string;
+    totalNotional: number;
+    direction: HyperTradeDirection;
+    sentAt: Date;
+    messageId?: number;
+}
+
+interface HyperAlertDocument extends HyperAlert, Document {}
+
+const HyperAlertSchema = new Schema<HyperAlertDocument>(
+    {
+        wallet: { type: String, required: true },
+        coin: { type: String, required: true },
+        direction: { type: String, required: true, enum: ['long', 'short'] },
+        totalNotional: { type: Number, required: true },
+        sentAt: { type: Date, required: true },
+        messageId: { type: Number }
+    },
+    { timestamps: true }
+);
+
+HyperAlertSchema.index({ wallet: 1, coin: 1, direction: 1 });
+
+const HyperAlertModel =
+    mongoose.models.HyperAlert || mongoose.model<HyperAlertDocument>('HyperAlert', HyperAlertSchema);
+
+export type HyperTradeRecord = {
+    wallet: string;
+    coin: string;
+    notional: number;
+    tradeTime: number;
+    direction: HyperTradeDirection;
+};
+
+export interface PositionKey {
+    wallet: string;
+    coin: string;
+    direction: HyperTradeDirection;
+}
 
 export default class HyperliquidDBService {
     private static formatDateKey(timestamp: number, windowMs?: number): string {
@@ -214,34 +249,10 @@ export default class HyperliquidDBService {
                 direction: doc.direction as HyperTradeDirection,
                 totalNotional: doc.totalNotional,
                 tradeCount: doc.tradeCount,
-                lastTradeTime: doc.lastTradeTime,
-                lastAlertedAt: doc.lastAlertedAt
+                lastTradeTime: doc.lastTradeTime
             };
         } catch (error) {
             logger.error(`Error recording trade for wallet ${trade.wallet}: ${error}`);
-            throw error;
-        }
-    }
-
-    static async markTradeAlerted(
-        wallet: string,
-        coin: string,
-        dateKey: string,
-        direction: HyperTradeDirection
-    ): Promise<void> {
-        try {
-            await HyperAggregationModel.updateOne(
-                { wallet, coin, dateKey, direction },
-                {
-                    $set: {
-                        lastAlertedAt: Date.now()
-                    }
-                }
-            );
-        } catch (error) {
-            logger.error(
-                `Error marking alerted status for wallet ${wallet}, coin ${coin}, dateKey ${dateKey}, direction ${direction}: ${error}`
-            );
             throw error;
         }
     }
@@ -301,14 +312,20 @@ export default class HyperliquidDBService {
         }
     }
 
-    static async getTradesToAlert(threshold: number, windowMs?: number): Promise<HyperAggregationRecord[]> {
+    static async getTradesToAlert(
+        keysToScan: PositionKey[],
+        threshold: number,
+        windowMs?: number
+    ): Promise<HyperAggregationRecord[]> {
         try {
             const dateKey = this.formatDateKey(Date.now(), windowMs);
+            if (keysToScan.length === 0) return [];
+
             const docs = await HyperAggregationModel.find(
                 {
                     dateKey,
                     totalNotional: { $gte: threshold },
-                    $or: [{ lastAlertedAt: { $exists: false } }, { lastAlertedAt: null }]
+                    $and: [{ $or: keysToScan.map((k) => ({ wallet: k.wallet, coin: k.coin, direction: k.direction })) }]
                 },
                 {
                     wallet: 1,
@@ -317,8 +334,7 @@ export default class HyperliquidDBService {
                     direction: 1,
                     totalNotional: 1,
                     tradeCount: 1,
-                    lastTradeTime: 1,
-                    lastAlertedAt: 1
+                    lastTradeTime: 1
                 }
             )
                 .lean()
@@ -332,8 +348,7 @@ export default class HyperliquidDBService {
                 direction: doc.direction as HyperTradeDirection,
                 totalNotional: doc.totalNotional,
                 tradeCount: doc.tradeCount,
-                lastTradeTime: doc.lastTradeTime,
-                lastAlertedAt: doc.lastAlertedAt
+                lastTradeTime: doc.lastTradeTime
             }));
         } catch (error) {
             logger.error(`${error}`);
@@ -348,6 +363,30 @@ export default class HyperliquidDBService {
             logger.info(`Deleted ${result.deletedCount} old records`);
         } catch (error) {
             logger.error(`${error}`);
+            throw error;
+        }
+    }
+
+    static async getLastAlert(
+        wallet: string,
+        coin: string,
+        direction: HyperTradeDirection
+    ): Promise<HyperAlert | null> {
+        try {
+            return HyperAlertModel.findOne({ wallet, coin, direction }, null, { sort: { sentAt: -1 } })
+                .lean()
+                .exec() as Promise<HyperAlert | null>;
+        } catch (error) {
+            logger.error(`Error retrieving last alert for wallet ${wallet}: ${error}`);
+            throw error;
+        }
+    }
+
+    static async insertAlert(alert: HyperAlert): Promise<void> {
+        try {
+            await HyperAlertModel.create(alert);
+        } catch (error) {
+            logger.error(`Error inserting alert for wallet ${alert.wallet}: ${error}`);
             throw error;
         }
     }

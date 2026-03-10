@@ -1,4 +1,4 @@
-import puppeteer, { Browser, Page } from 'puppeteer';
+import { Browser, Page } from 'puppeteer';
 import { config } from '../../config';
 import DBService, {
     BetOutcome,
@@ -12,6 +12,8 @@ import DBService, {
 import { Tracker } from '../../common/tracker';
 import { InlineKeyboardMarkup } from 'telegraf/types';
 import { capitalize, formatCurrency, sleep } from '../../common/utils';
+import puppeteer from 'puppeteer-extra';
+import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 
 interface Payload {
     type: string;
@@ -156,6 +158,8 @@ const allSportBetsPayload = {
     }
 };
 
+puppeteer.use(StealthPlugin());
+
 export default class StakeService extends Tracker {
     private stakeCurrenciesKey = 'stake:currencies';
     private page: Page | null = null;
@@ -170,16 +174,18 @@ export default class StakeService extends Tracker {
 
         try {
             this.browser = await puppeteer.launch({
-                headless: false,
+                headless: config.puppeteer.headless,
+                userDataDir: config.puppeteer.userDir,
                 args: [
                     '--no-sandbox',
                     '--disable-setuid-sandbox',
                     '--disable-blink-features=AutomationControlled',
-                    '--display=:0'
-                ]
+                    '--display=:0',
+                    '--disable-dev-shm-usage'
+                ],
+                defaultViewport: { width: 1366, height: 768 }
             });
             this.page = await this.browser.newPage();
-            await this.page.setUserAgent({ userAgent: config.puppeteer.userAgent });
             await this.page.goto(config.stake.url, { waitUntil: 'networkidle2' });
             this.logger.info('Puppeteer initialized');
             await sleep(10000);
@@ -613,7 +619,7 @@ export default class StakeService extends Tracker {
                 outcomes
             });
             if (amountUSD >= 1000)
-                this.logger.info(
+                this.logger.debug(
                     `Detected high-value bet: IID ${betData.iid} ${formatCurrency(amountUSD)} (${source})`
                 );
         } catch (err) {

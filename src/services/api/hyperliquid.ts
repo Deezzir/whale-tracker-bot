@@ -42,7 +42,7 @@ interface PortfolioStats {
     vlm?: string;
 }
 
-type PortfolioResponse = Array<[string, PortfolioStats]>;
+export type PortfolioResponse = Array<[string, PortfolioStats]>;
 
 interface PerpsMeta {
     universe: {

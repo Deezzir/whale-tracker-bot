@@ -27,7 +27,8 @@ export default class Logger {
 
     private log(level: LogLevel, module: string, message: string, data?: unknown): void {
         const timestamp = this.formatTimestamp();
-        const prefix = `[${timestamp}] [${level}] [${module}]`;
+        const prefix =
+            level === 'DEBUG' ? `[${timestamp}] [${level}] [${module}]` : `[${timestamp}] [${level}]  [${module}]`;
         const line =
             data !== undefined
                 ? `${prefix} ${message} ${typeof data === 'string' ? data : JSON.stringify(data)}`

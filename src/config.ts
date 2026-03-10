@@ -41,7 +41,8 @@ export const config = {
     hyperliquid: {
         minSuspiciousNotionalUSD: parseFloat(optionalEnv('HS_MIN_NOTIONAL_USD', '100000')),
         aggregationWindowMs: parseInt(optionalEnv('HS_AGGREGATION_WINDOW_MS', String(24 * 60 * 60 * 1000)), 10),
-        posChangeAlertPercent: parseFloat(optionalEnv('HS_POS_CHANGE_ALERT_PERCENT', '10')),
+        minimalGrowthPercent: parseFloat(optionalEnv('HS_POS_CHANGE_ALERT_PERCENT', '20')),
+        minimalGrowthUSD: parseFloat(optionalEnv('HS_POS_CHANGE_ALERT_USD', '20000')),
         mainCoins: ['BTC', 'ETH', 'SOL'] as string[],
         batchSize: 1000,
         wss: 'wss://api.hyperliquid.xyz/ws',
@@ -50,7 +51,7 @@ export const config = {
         freshWindowMs: 2 * 24 * 60 * 60 * 1000, // 2 days,
         checkIntervalMs: 30 * 60 * 1000, // 30 minutes
         batchFlushIntervalMs: 60 * 1000, // 1 minute
-        cleanupTTLms: 3 * 24 * 60 * 60 * 1000 // 72 hours
+        cleanupTTLms: 7 * 24 * 60 * 60 * 1000 // 7 days
     },
     stake: {
         minAlertBetUSD: parseFloat(optionalEnv('STAKE_MIN_BET_USD', '10000')),
@@ -74,9 +75,9 @@ export const config = {
         minTradeUSD: 50,
         dataApiRateLimit: 5,
         gammaApiRateLimit: 2,
-        minimalGrowthPercent: 20,
-        minimalGrowthUSD: 9000,
-        batchFlushIntervalMs: 10 * 1000, // 2 seconds
+        minimalGrowthPercent: parseFloat(optionalEnv('POLY_POS_CHANGE_ALERT_PERCENT', '20')),
+        minimalGrowthUSD: parseFloat(optionalEnv('POLY_POS_CHANGE_ALERT_USD', '9000')),
+        batchFlushIntervalMs: 10 * 1000, // 30 seconds
         cleanupTTLms: 7 * 24 * 60 * 60 * 1000 // 7 days
     },
     db: {
@@ -86,7 +87,7 @@ export const config = {
         redisPassword: optionalEnv('REDIS_PASSWORD', '') as string
     },
     puppeteer: {
-        userAgent:
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36'
+        userDir: optionalEnv('PUPPETEER_USER_DIR', './.data/puppeteer') as string,
+        headless: optionalEnv('PUPPETEER_HEADLESS', 'true') === 'true'
     }
 } as const;

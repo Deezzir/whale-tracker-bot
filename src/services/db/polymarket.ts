@@ -19,31 +19,6 @@ export interface PolyTrade {
     slug?: string;
 }
 
-interface PolyAlert {
-    proxyWallet: string;
-    conditionId: string;
-    outcomeIndex: number;
-    positionUsd: number;
-    sentAt: Date;
-    messageId?: number;
-}
-
-export interface PolyAggregationRecord {
-    wallet: string;
-    conditionId: string;
-    outcomeIndex: number;
-    outcome: string;
-    title: string;
-    slug: string;
-    totalBuyUsd: number;
-    totalSellUsd: number;
-    netUsd: number;
-    avgPrice: number;
-    tradeCount: number;
-    firstTradeAt: Date;
-    lastTradeAt: Date;
-}
-
 interface PolyTradeDocument extends PolyTrade, Document {}
 
 const PolyTradeSchema = new Schema<PolyTradeDocument>(
@@ -70,6 +45,15 @@ PolyTradeSchema.index({ timestamp: 1 });
 
 const PolyTradeModel = mongoose.models.PolyTrade || mongoose.model<PolyTradeDocument>('PolyTrade', PolyTradeSchema);
 
+interface PolyAlert {
+    proxyWallet: string;
+    conditionId: string;
+    outcomeIndex: number;
+    positionUsd: number;
+    sentAt: Date;
+    messageId?: number;
+}
+
 interface PolyAlertDocument extends PolyAlert, Document {}
 
 const PolyAlertSchema = new Schema<PolyAlertDocument>(
@@ -88,6 +72,28 @@ PolyAlertSchema.index({ proxyWallet: 1, conditionId: 1, outcomeIndex: 1 });
 
 const PolyAlertModel = mongoose.models.PolyAlert || mongoose.model<PolyAlertDocument>('PolyAlert', PolyAlertSchema);
 
+export interface PolyAggregationRecord {
+    wallet: string;
+    conditionId: string;
+    outcomeIndex: number;
+    outcome: string;
+    title: string;
+    slug: string;
+    totalBuyUsd: number;
+    totalSellUsd: number;
+    netUsd: number;
+    avgPrice: number;
+    tradeCount: number;
+    firstTradeAt: Date;
+    lastTradeAt: Date;
+}
+
+export interface PositionKey {
+    proxyWallet: string;
+    conditionId: string;
+    outcomeIndex: number;
+}
+
 export default class PolymarketDBService {
     static async addTradesBulk(tradeList: PolyTrade[]): Promise<boolean> {
         if (tradeList.length === 0) return true;
@@ -97,9 +103,6 @@ export default class PolymarketDBService {
         } catch (err: any) {
             if (err?.code === 11000 || err?.name === 'MongoBulkWriteError') {
                 const inserted = err?.result?.insertedCount ?? 0;
-                logger.warn(
-                    `Trade batch had ${err?.writeErrors?.length ?? 0} duplicate(s), inserted ${inserted} new trade(s)`
-                );
                 return inserted > 0;
             }
             logger.error(`Error inserting trade batch: ${err}`);
@@ -120,14 +123,22 @@ export default class PolymarketDBService {
     }
 
     static async getTradesToAlert(
+        keysToScan: PositionKey[],
         threshold: number,
         sportThreshold: number,
         windowMs: number
     ): Promise<PolyAggregationRecord[]> {
         try {
             const windowStart = new Date(Date.now() - windowMs);
-            const matchStage: Record<string, unknown> = { timestamp: { $gte: windowStart } };
             const minThreshold = Math.min(threshold, sportThreshold);
+            const matchStage: Record<string, unknown> = { timestamp: { $gte: windowStart } };
+            if (keysToScan.length === 0) return [];
+
+            matchStage.$or = keysToScan.map((k) => ({
+                proxyWallet: k.proxyWallet,
+                conditionId: k.conditionId,
+                outcomeIndex: k.outcomeIndex
+            }));
 
             type AggResult = {
                 _id: { wallet: string; cond: string; outcome: number };

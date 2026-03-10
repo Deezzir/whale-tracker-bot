@@ -66,7 +66,7 @@ export default class TelegramService {
             ``,
             `┌─ <b>Hyperliquid configs</b>`,
             `  🎰 Minimum notional: <b>${fmt(config.hyperliquid.minSuspiciousNotionalUSD)}</b>`,
-            `  📈 Re-alert: <b>+${fmt(config.hyperliquid.posChangeAlertPercent)}%</b> of the position increase`,
+            `  📈 Re-alert: <b>+${fmt(config.hyperliquid.minimalGrowthPercent)}%</b> of the position increase`,
             `  ⏳ Data retention: <b>${config.hyperliquid.cleanupTTLms / (24 * 60 * 60 * 1000)} days</b>`,
             `└─`
         ].join('\n');

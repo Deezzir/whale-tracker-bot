@@ -137,19 +137,20 @@ function startMonitoringServices(): void {
     }
 }
 
-function stopMonitoringServices(): void {
-    for (const service of services) {
-        logger.info(`Stopping service: ${service.constructor.name}`);
-        void service.stop();
-    }
+async function stopMonitoringServices(): Promise<void> {
+    await Promise.allSettled(
+        services.map((service) => {
+            logger.info(`Stopping service: ${service.constructor.name}`);
+            return service.stop();
+        })
+    );
 }
 
-function shutdown(code: number): void {
-    void closeDB();
-    void closeRedis();
-    void stopMonitoringServices();
-    void telegram.stop();
+async function shutdown(code: number): Promise<void> {
+    logger.info('Shutting down...');
     if (keepAlive) clearInterval(keepAlive);
+    telegram.stop();
+    await Promise.allSettled([closeDB(), closeRedis(), stopMonitoringServices()]);
     logger.info('Shutdown complete.');
     process.exit(code);
 }
@@ -172,8 +173,8 @@ async function main(): Promise<void> {
 
     keepAlive = setInterval(() => {}, 60_000);
 
-    process.once('SIGINT', () => shutdown(0));
-    process.once('SIGTERM', () => shutdown(0));
+    process.once('SIGINT', () => void shutdown(0));
+    process.once('SIGTERM', () => void shutdown(0));
 }
 
 main().catch((error) => {
