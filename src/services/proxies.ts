@@ -32,7 +32,7 @@ class ProxyService {
             proxies = lines.map((line) => this.parseProxy(line)).filter((p): p is Proxy => p !== null);
             logger.info(`Loaded ${proxies.length} proxies from ${this.path}`);
         } catch (error) {
-            logger.error(`Failed to load proxies: ${error}`);
+            logger.warn(`Failed to load proxies: ${error}`);
         }
 
         if (proxies.length === 0)
