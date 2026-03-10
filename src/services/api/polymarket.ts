@@ -6,13 +6,25 @@ import Logger from '../../common/logger';
 
 const logger = new Logger('PolymarketApi');
 
-interface Market {
+export interface Market {
+    id: string;
+    question: string;
     conditionId: string;
-    title: string;
     slug: string;
-    icon?: string;
-    outcomes: string[];
-    updatedAt: Date;
+    outcomes: string;
+    outcomePrices: string;
+    clobTokenIds: string;
+    closed: boolean;
+    endDate: string;
+    eventStartTime: string;
+    volume: string;
+    active: boolean;
+    negRisk: boolean;
+    orderPriceMinTickSize: string;
+    tokenIds: { up: string; down: string };
+    tags: {
+        label: string;
+    }[];
 }
 
 interface WalletInfo {
@@ -24,9 +36,10 @@ export interface WalletStats {
     lastTradeTimestamp: number | null;
     totalBuyTrades: number;
     buyTradeAmounts: number[];
+    sellTradeAmounts?: number[];
 }
 
-export interface RawTrade {
+export interface Trade {
     proxyWallet: string;
     side: 'BUY' | 'SELL';
     asset: string;
@@ -43,6 +56,7 @@ export interface RawTrade {
     name: string;
     pseudonym: string;
     transactionHash: string;
+    usdcSize: number;
 }
 
 const PAGE_SIZE = 100;
@@ -51,50 +65,34 @@ const MAX_OFFSET = 3000;
 export default class PolymarketAPIService {
     private gammaLimiter = new RateLimiter(config.polymarket.gammaApiRateLimit);
     private dataLimiter = new RateLimiter(config.polymarket.dataApiRateLimit);
-    private marketCacheKey = (conditionId: string) => `gamma:market:${conditionId}`;
+    private marketCacheKey = (slug: string) => `gamma:market:${slug}`;
     private walletCacheKey = (proxyWallet: string) => `gamma:wallet:${proxyWallet}`;
     private walletStatsCacheKey = (proxyWallet: string) => `gamma:wallet-stats:${proxyWallet}`;
     private redis = getRedisClient();
 
-    public async getMarketMetadata(conditionId: string): Promise<Market | null> {
-        const cached = await this.redis.get(this.marketCacheKey(conditionId));
+    public async getMarketIBySlug(slug: string): Promise<Market | null> {
+        const cached = await this.redis.get(this.marketCacheKey(slug));
         if (cached) return JSON.parse(cached) as Market;
 
         await this.gammaLimiter.acquire();
 
         try {
-            const url = `${config.polymarket.gammaApi}/markets`;
-            const { data } = await axios.get<unknown[]>(url, { params: { condition_id: conditionId } });
-
-            if (!Array.isArray(data) || data.length === 0) {
-                logger.warn(`No market found for conditionId: ${conditionId}`);
-                return null;
-            }
-
-            const raw = data[0] as Record<string, unknown>;
-            const market: Market = {
-                conditionId,
-                title: (raw.question as string) || (raw.title as string) || 'Unknown Market',
-                slug: (raw.event_slug as string) || (raw.slug as string) || '',
-                icon: (raw.icon as string) || undefined,
-                outcomes: raw.outcomes ? JSON.parse(raw.outcomes as string) : [],
-                updatedAt: new Date()
-            };
+            const url = `${config.polymarket.gammaApi}/markets/slug/${slug}`;
+            const result = await axios.get<Market>(url, { params: { include_tag: true } });
 
             await this.redis.setEx(
-                this.marketCacheKey(conditionId),
+                this.marketCacheKey(slug),
                 config.monitor.cacheTTLMs / 1000,
-                JSON.stringify(market)
+                JSON.stringify(result.data)
             );
-            logger.info(`Cached market: ${market.title}`);
-            return market;
+            return result.data;
         } catch (err) {
-            logger.error(`Failed to fetch market metadata for ${conditionId}`, err);
+            logger.error(`Failed to fetch market metadata for ${slug}`, err);
             return null;
         }
     }
 
-    public async getFirstTradeInfo(proxyWallet: string): Promise<WalletInfo> {
+    public async getFirstTrade(proxyWallet: string): Promise<WalletInfo> {
         const cached = await this.redis.get(this.walletCacheKey(proxyWallet));
         if (cached) {
             const parsed = JSON.parse(cached) as { date: string | null; nickname: string | null };
@@ -105,7 +103,7 @@ export default class PolymarketAPIService {
 
         try {
             const url = `${config.polymarket.dataApi}/activity`;
-            const { data } = await axios.get<unknown[]>(url, {
+            const { data } = await axios.get<Trade[]>(url, {
                 params: {
                     user: proxyWallet,
                     sortBy: 'TIMESTAMP',
@@ -115,7 +113,7 @@ export default class PolymarketAPIService {
                 }
             });
 
-            if (!Array.isArray(data) || data.length === 0) {
+            if (data.length === 0) {
                 logger.warn(`No trades found for ${proxyWallet}`);
                 await this.redis.setEx(
                     this.walletCacheKey(proxyWallet),
@@ -125,9 +123,9 @@ export default class PolymarketAPIService {
                 return { date: null, nickname: null };
             }
 
-            const entry = data[0] as Record<string, unknown>;
-            const date = new Date((entry.timestamp as number) * 1000);
-            const nickname = (entry.name as string) || null;
+            const entry = data[0];
+            const date = new Date(entry.timestamp * 1000);
+            const nickname = entry.name || null;
             await this.redis.setEx(
                 this.walletCacheKey(proxyWallet),
                 config.monitor.cacheTTLMs / 1000,
@@ -148,7 +146,7 @@ export default class PolymarketAPIService {
 
         try {
             const url = `${config.polymarket.dataApi}/activity`;
-            const { data } = await axios.get<unknown[]>(url, {
+            const { data } = await axios.get<Trade[]>(url, {
                 params: {
                     user: proxyWallet,
                     sortBy: 'TIMESTAMP',
@@ -158,7 +156,7 @@ export default class PolymarketAPIService {
                 }
             });
 
-            if (!Array.isArray(data) || data.length === 0) {
+            if (data.length === 0) {
                 const stats: WalletStats = { lastTradeTimestamp: null, totalBuyTrades: 0, buyTradeAmounts: [] };
                 await this.redis.setEx(
                     this.walletStatsCacheKey(proxyWallet),
@@ -168,15 +166,15 @@ export default class PolymarketAPIService {
                 return stats;
             }
 
-            const lastEntry = data[0] as Record<string, unknown>;
-            const buyTrades = data.filter((r) => (r as Record<string, unknown>).side === 'BUY') as Array<
-                Record<string, unknown>
-            >;
+            const lastEntry = data[0];
+            const buyTrades = data.filter((r) => r.side === 'BUY');
+            const sellTrades = data.filter((r) => r.side === 'SELL');
 
             const stats: WalletStats = {
                 lastTradeTimestamp: (lastEntry.timestamp as number) * 1000,
                 totalBuyTrades: buyTrades.length,
-                buyTradeAmounts: buyTrades.map((r) => (r.usdcSize as number) || 0)
+                buyTradeAmounts: buyTrades.map((r) => (r.usdcSize as number) || 0),
+                sellTradeAmounts: sellTrades.map((r) => (r.usdcSize as number) || 0)
             };
 
             await this.redis.setEx(
@@ -191,8 +189,8 @@ export default class PolymarketAPIService {
         }
     }
 
-    public async getRecentTrades(): Promise<RawTrade[]> {
-        const allTrades: RawTrade[] = [];
+    public async getRecentTrades(): Promise<Trade[]> {
+        const allTrades: Trade[] = [];
         let offset = 0;
 
         while (offset < MAX_OFFSET) {
@@ -212,7 +210,7 @@ export default class PolymarketAPIService {
                     break;
                 }
 
-                const data: RawTrade[] = await response.json();
+                const data: Trade[] = await response.json();
                 if (data.length === 0) break;
 
                 allTrades.push(...data);

@@ -296,7 +296,7 @@ export default class HyperliquidService extends Tracker {
             }
         };
 
-        const alertNoDataLoop = this.alertNoData(config.monitor.noDataTimeoutMs, async () => {
+        const alertNoDataLoop = this.watchDog(config.monitor.noDataTimeoutMs, async () => {
             this.logger.warn('Forcing WebSocket reconnection due to no data received.');
             for (const slot of this.sockets) this.reconnectWebSocket(slot);
         });

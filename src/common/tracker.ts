@@ -32,7 +32,7 @@ export abstract class Tracker {
         return this.monitoring;
     }
 
-    protected async alertNoData(timeoutMs: number, forceReconnect?: () => Promise<void>): Promise<void> {
+    protected async watchDog(timeoutMs: number, recover?: () => Promise<void>): Promise<void> {
         const checkInterval = 5 * 60 * 1000;
 
         while (this.monitoring) {
@@ -44,8 +44,8 @@ export abstract class Tracker {
                         config.telegram.ownerUserID,
                         `⚠️ Alert: No data received for ${Math.floor(timeoutMs / 60000)} minutes from ${this.name}.`
                     );
+                    if (recover) void recover();
                 }
-                if (forceReconnect) void forceReconnect();
             } catch (err) {
                 this.logger.error(`Error in alertNoData: ${err}`);
             }

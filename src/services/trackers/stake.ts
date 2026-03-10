@@ -14,7 +14,7 @@ import { InlineKeyboardMarkup } from 'telegraf/types';
 import { capitalize, formatCurrency, sleep } from '../../common/utils';
 import puppeteer from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
-import ProxyService from '../proxies';
+import ProxyService, { Proxy } from '../proxies';
 
 interface Payload {
     type: string;
@@ -163,13 +163,14 @@ puppeteer.use(StealthPlugin());
 
 export default class StakeService extends Tracker {
     private url = config.stake.url;
-    private proxy = ProxyService.getRandomProxy();
+    private proxy: Proxy | null = ProxyService.getRandomProxy();
 
     private stakeCurrenciesKey = 'stake:currencies';
     private page: Page | null = null;
     private browser: Browser | null = null;
     private betsBatch: Partial<StakeBetDocument>[] = [];
     private betsBatchInterval?: NodeJS.Timeout;
+    private reconnecting = false;
 
     async start(): Promise<void> {
         if (this.monitoring) return;
@@ -204,7 +205,6 @@ export default class StakeService extends Tracker {
                 `Puppeteer launched with${this.proxy ? ` proxy ${this.proxy.host}:${this.proxy.port}` : 'out proxy'}`
             );
             this.logger.info('Puppeteer initialized');
-            await sleep(10000);
         } catch (error) {
             this.monitoring = false;
             this.page = null;
@@ -259,7 +259,7 @@ export default class StakeService extends Tracker {
                 await this.cancellableSleep(config.monitor.cleanupIntervalMs);
             }
         };
-        await Promise.all([scanLoop(), cleanupLoop(), this.alertNoData(config.monitor.noDataTimeoutMs)]);
+        await Promise.all([scanLoop(), cleanupLoop(), this.watchDog(config.monitor.noDataTimeoutMs)]);
     }
 
     private async scanAndAlert(): Promise<void> {
@@ -426,6 +426,35 @@ export default class StakeService extends Tracker {
         return rateMap;
     }
 
+    private async reconnectPage(): Promise<void> {
+        if (!this.monitoring || this.reconnecting) return;
+        if (!this.browser) throw new Error('Browser not initialized');
+        this.reconnecting = true;
+        this.logger.info('Reconnecting: recreating page and resubscribing WebSockets...');
+
+        try {
+            if (this.page) {
+                await this.page.close().catch(() => { });
+                this.page = null;
+            }
+            await sleep(2000);
+            this.page = await this.browser.newPage();
+            if (this.proxy)
+                await this.page.authenticate({
+                    username: this.proxy.username,
+                    password: this.proxy.password
+                });
+            await this.page.goto(this.url, { waitUntil: 'networkidle2' });
+            await this.page.exposeFunction('onWSMessage', this.handleMessage.bind(this));
+            await this.subscribeBets();
+            this.logger.info('Page recreated and WebSockets resubscribed');
+        } catch (error) {
+            this.logger.error(`Error recreating page: ${error}`);
+        } finally {
+            this.reconnecting = false;
+        }
+    }
+
     private async subscribeBets(): Promise<void> {
         if (!this.page) throw new Error('Puppeteer page is not initialized');
 
@@ -455,7 +484,7 @@ export default class StakeService extends Tracker {
                     if (manager[wsKey]) {
                         try {
                             manager[wsKey].close();
-                        } catch {}
+                        } catch { }
                         manager[wsKey] = null;
                     }
                     if (manager[intervalKey]) {
@@ -471,8 +500,7 @@ export default class StakeService extends Tracker {
                     name: string,
                     wsKey: 'wsAll' | 'wsHighroller',
                     intervalKey: 'pingIntervalAll' | 'pingIntervalHighroller',
-                    subscriptionPayload: Payload,
-                    reconnectFn: () => void
+                    subscriptionPayload: Payload
                 ) => {
                     const ws = new WebSocket(wssUrl, 'graphql-transport-ws');
                     manager[wsKey] = ws;
@@ -506,17 +534,17 @@ export default class StakeService extends Tracker {
 
                     ws.onerror = (err) => log(`WebSocket (${name}) error: ${err}`, 'error');
                     ws.onclose = () => {
-                        log(`WebSocket (${name}) closed. Reconnecting...`, 'warn');
+                        log(`WebSocket (${name}) closed.`, 'warn');
                         if (manager[intervalKey]) {
                             clearInterval(manager[intervalKey]);
                             manager[intervalKey] = null;
                         }
-                        setTimeout(() => reconnectFn(), 1000);
+                        (window as any).onWSMessage(JSON.stringify({ type: 'reconnect' }));
                     };
                 };
 
                 manager.connectAll = () => {
-                    createConnection('AllSportBets', 'wsAll', 'pingIntervalAll', allSportsPayload, manager.connectAll);
+                    createConnection('AllSportBets', 'wsAll', 'pingIntervalAll', allSportsPayload);
                 };
 
                 manager.connectHighroller = () => {
@@ -524,8 +552,7 @@ export default class StakeService extends Tracker {
                         'HighrollerSportBets',
                         'wsHighroller',
                         'pingIntervalHighroller',
-                        highrollerPayload,
-                        manager.connectHighroller
+                        highrollerPayload
                     );
                 };
 
@@ -561,6 +588,10 @@ export default class StakeService extends Tracker {
             const parsed = JSON.parse(message);
             if (parsed.type === 'log') {
                 this.handleBrowserLog(parsed);
+                return;
+            }
+            if (parsed.type === 'reconnect') {
+                await this.reconnectPage();
                 return;
             }
             if (parsed.type !== 'next') return;

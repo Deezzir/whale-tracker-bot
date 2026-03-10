@@ -56,7 +56,9 @@ class ProxyService {
         const [host, port] = hostPort.split(':');
 
         const proxy = { host, port, username, password };
-        logger.info(`Parsed proxy - Host: ${host}, Port: ${port}, Username: ${username} Password: ${password.replace(/./g, '*')}`);
+        logger.info(
+            `Parsed proxy - Host: ${host}, Port: ${port}, Username: ${username} Password: ${password.replace(/./g, '*')}`
+        );
         return proxy;
     }
 

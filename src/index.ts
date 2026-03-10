@@ -175,7 +175,7 @@ async function main(): Promise<void> {
     logger.info('Starting monitoring services.');
     startMonitoringServices();
 
-    keepAlive = setInterval(() => { }, 60_000);
+    keepAlive = setInterval(() => {}, 60_000);
 
     process.once('SIGINT', () => void shutdown(0));
     process.once('SIGTERM', () => void shutdown(0));

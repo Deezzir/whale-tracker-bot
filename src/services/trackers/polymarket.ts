@@ -1,9 +1,9 @@
 import { InlineKeyboardMarkup } from 'telegraf/types';
 import { Tracker } from '../../common/tracker';
 import { config } from '../../config';
-import PolymarketAPIService, { RawTrade } from '../api/polymarket';
+import PolymarketAPIService, { Trade } from '../api/polymarket';
 import PolymarketDBService, { PolyAggregationRecord, PolyTrade, PositionKey } from '../db/polymarket';
-import { escapeHtml, formatCurrency, formatDate } from '../../common/utils';
+import { escapeHtml, formatCurrency, formatDate, sleep } from '../../common/utils';
 
 type MarketCategory = 'sport' | 'esports' | 'regular';
 type AccountTag = 'FRESH' | 'DORMANT' | 'SMALL' | 'MEDIUM' | 'LARGE';
@@ -12,22 +12,23 @@ type TradeTag = 'FRESH' | 'BASIC' | 'CONFIDENT' | 'MEGABET' | 'WEAK';
 interface WsMessage {
     topic: string;
     type: string;
-    payload?: RawTrade;
+    payload?: Trade;
 }
 
 interface AlertMessageData {
-    positionUsd: number;
+    positionUSD: number;
     outcome: string;
     marketTitle: string;
     marketSlug?: string;
     wallet: string;
+    tags: string[];
     nickname: string | null;
     firstTradeDate: Date | null;
     avgPrice: number;
-    isNew: boolean;
     category: MarketCategory;
     accountTag: AccountTag;
     tradeTag: TradeTag;
+    tradeMedianUSD: number;
 }
 
 function classifyAccountTag(
@@ -140,7 +141,7 @@ export default class PolymarketService extends Tracker {
             }
         };
 
-        const alertNoDataLoop = this.alertNoData(config.monitor.noDataTimeoutMs, async () => {
+        const alertNoDataLoop = this.watchDog(config.monitor.noDataTimeoutMs, async () => {
             this.logger.warn('Forcing WebSocket reconnection due to no data received.');
             this.reconnectWebSocket();
         });
@@ -184,17 +185,19 @@ export default class PolymarketService extends Tracker {
     }
 
     private async processAlertCandidate(candidate: PolyAggregationRecord): Promise<void> {
-        const [walletInfo, walletStats] = await Promise.all([
-            this.api.getFirstTradeInfo(candidate.wallet),
+        const [marketInfo, walletInfo, walletStats] = await Promise.all([
+            this.api.getMarketIBySlug(candidate.slug),
+            this.api.getFirstTrade(candidate.wallet),
             this.api.getWalletStats(candidate.wallet)
         ]);
 
         const title = candidate.title;
+        const tags = marketInfo ? marketInfo.tags.map((t) => t.label) : [];
         const category: MarketCategory = isEsportsMarket(title)
             ? 'esports'
             : isSportMarket(title)
-              ? 'sport'
-              : 'regular';
+                ? 'sport'
+                : 'regular';
         const threshold =
             category === 'sport' ? config.polymarket.sportAlertThresholdUsd : config.polymarket.alertThresholdUsd;
         if (candidate.netUsd < threshold) {
@@ -210,6 +213,7 @@ export default class PolymarketService extends Tracker {
             walletStats.totalBuyTrades
         );
         const tradeTag = classifyTradeTag(candidate.netUsd, walletStats.buyTradeAmounts);
+        const tradeMedianUSD = getMedianAmount(walletStats.buyTradeAmounts);
 
         const lastAlert = await PolymarketDBService.getLastAlert(
             candidate.wallet,
@@ -257,48 +261,24 @@ export default class PolymarketService extends Tracker {
             `New high-value position detected for ${candidate.wallet} (${candidate.conditionId}): ${formatCurrency(candidate.netUsd)}, sending alert`
         );
         const result = this.formatAlertMessage({
-            positionUsd: candidate.netUsd,
+            positionUSD: candidate.netUsd,
             outcome: candidate.outcome,
             marketTitle: title || 'Unknown Market',
             marketSlug: candidate.slug,
+            tags,
             wallet: candidate.wallet,
             nickname: walletInfo.nickname,
             firstTradeDate: walletInfo.date,
             avgPrice: candidate.avgPrice,
-            isNew: true,
             category,
             accountTag,
-            tradeTag
+            tradeTag,
+            tradeMedianUSD: tradeMedianUSD || 0
         });
         if (!result) return;
         const { msg, buttons } = result;
 
-        let messageId: number | undefined;
-        let sentWithPhoto = false;
-        if (config.puppeteer.screenshotEnabled) {
-            const screenshot = await this.screenshoter.capture(`${config.polymarket.url}/profile/${candidate.wallet}`);
-            if (screenshot) {
-                messageId = await this.tg.sendPhoto(config.telegram.chatID, screenshot, msg, {
-                    reply_markup: buttons,
-                    message_thread_id: config.telegram.polyTopicID
-                });
-                sentWithPhoto = true;
-            }
-        }
-        if (!sentWithPhoto) {
-            messageId = await this.tg.sendMessage(config.telegram.chatID, msg, {
-                reply_markup: buttons,
-                message_thread_id: config.telegram.polyTopicID
-            });
-        }
-        await PolymarketDBService.insertAlert({
-            proxyWallet: candidate.wallet,
-            conditionId: candidate.conditionId,
-            outcomeIndex: candidate.outcomeIndex,
-            positionUsd: candidate.netUsd,
-            sentAt: new Date(),
-            messageId
-        });
+        await this.sendAlert(candidate, msg, buttons);
     }
 
     private reconnectWebSocket() {
@@ -355,12 +335,12 @@ export default class PolymarketService extends Tracker {
         this.ws = ws;
     }
 
-    private async handleTrade(raw: RawTrade): Promise<void> {
+    private async handleTrade(raw: Trade): Promise<void> {
         const trade = this.transformTrade(raw);
         if (!trade) return;
 
         this.tradeBatch.push(trade);
-        if (this.tradeBatch.length >= config.hyperliquid.batchSize) await this.flushTradeBatch();
+        if (this.tradeBatch.length >= config.polymarket.batchSize) await this.flushTradeBatch();
     }
 
     async flushTradeBatch(): Promise<void> {
@@ -405,14 +385,23 @@ export default class PolymarketService extends Tracker {
         const lines = [
             `<b>${icon} ${escapeHtml(data.marketTitle)}</b>`,
             ``,
-            `<b>🏆 ${formatCurrency(data.positionUsd)}</b> on <b>${data.outcome}</b>`,
+            `<b>🏆 ${formatCurrency(data.positionUSD)}</b> on <b>${data.outcome}</b>`,
             `<b>Trader:</b> ${data.nickname ? `#${escapeHtml(data.nickname)}` : `<code>${data.wallet}</code>`}`,
             `<b>Avg Price:</b> ${Math.round(data.avgPrice * 100)}¢`,
             `<b>First Trade:</b> ${formatDate(data.firstTradeDate)}`,
             `<b>Account:</b> ${tagLabel(data.accountTag)}`,
-            `<b>Trade:</b> ${tagLabel(data.tradeTag)}`,
             ``,
-            data.isNew ? `🆕 New position detected` : `📈 Position increased significantly`
+            `<b>Trade:</b> ${tagLabel(data.tradeTag)}`,
+            `<b>Trade Median:</b> ${formatCurrency(data.tradeMedianUSD)}`,
+            ``,
+            `${data.tags.length > 0
+                ? data.tags
+                    .slice(0, 2)
+                    .map((t) => `${escapeHtml(t)}`)
+                    .join(', ')
+                : ''
+            }`,
+            ``
         ];
 
         return {
@@ -443,7 +432,7 @@ export default class PolymarketService extends Tracker {
         return lines.join('\n');
     }
 
-    private transformTrade(raw: RawTrade): PolyTrade | null {
+    private transformTrade(raw: Trade): PolyTrade | null {
         const price = raw.price;
         const size = raw.size;
         const usdAmount = size * price;
@@ -466,5 +455,52 @@ export default class PolymarketService extends Tracker {
             title: raw.title,
             slug: raw.slug
         };
+    }
+
+    private async sendAlert(candidate: PolyAggregationRecord, msg: string, buttons: InlineKeyboardMarkup): Promise<void> {
+        const otherChatId = -1003468238602;
+        const otherTopicId = 10961;
+
+        try {
+            let messageId: number | undefined;
+            let sentWithPhoto = false;
+            if (config.puppeteer.screenshotEnabled) {
+                const screenshot = await this.screenshoter.capture(`${config.polymarket.url}/profile/${candidate.wallet}`);
+                if (screenshot) {
+                    /* FIXME -------------------------------------*/
+                    await this.tg.sendPhoto(otherChatId, screenshot, msg, { reply_markup: buttons, message_thread_id: otherTopicId });
+                    await sleep(1000);
+                    /*--------------------------------------------*/
+
+                    messageId = await this.tg.sendPhoto(config.telegram.chatID, screenshot, msg, {
+                        reply_markup: buttons,
+                        message_thread_id: config.telegram.polyTopicID
+                    });
+                    sentWithPhoto = true;
+                }
+            }
+            if (!sentWithPhoto) {
+                /* FIXME -------------------------------------*/
+                await this.tg.sendMessage(otherChatId, msg, { reply_markup: buttons, message_thread_id: otherTopicId });
+                await sleep(1000);
+                /*--------------------------------------------*/
+
+                messageId = await this.tg.sendMessage(config.telegram.chatID, msg, {
+                    reply_markup: buttons,
+                    message_thread_id: config.telegram.polyTopicID
+                });
+            }
+
+            await PolymarketDBService.insertAlert({
+                proxyWallet: candidate.wallet,
+                conditionId: candidate.conditionId,
+                outcomeIndex: candidate.outcomeIndex,
+                positionUsd: candidate.netUsd,
+                sentAt: new Date(),
+                messageId
+            });
+        } catch (error) {
+            this.logger.error(`Failed to send alert for ${candidate.wallet} (${candidate.conditionId}): ${error}`);
+        }
     }
 }

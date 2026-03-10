@@ -1,5 +1,5 @@
 import dotenv from 'dotenv';
-dotenv.config({ path: './.env' });
+dotenv.config({ path: './.env', quiet: true });
 
 function requireEnv(name: string): string {
     const value = process.env[name];
@@ -17,6 +17,8 @@ export enum Environment {
     Development = 'development',
     Production = 'production'
 }
+
+const ASSETS_PATH = './resources';
 
 // Config
 export const config = {
@@ -39,10 +41,10 @@ export const config = {
         noDataTimeoutMs: 5 * 60 * 1000 // 5 minutes
     },
     hyperliquid: {
-        minSuspiciousNotionalUSD: parseFloat(optionalEnv('HS_MIN_NOTIONAL_USD', '100000')),
+        minSuspiciousNotionalUSD: parseFloat(optionalEnv('HS_MIN_NOTIONAL_USD', '250000')),
         aggregationWindowMs: parseInt(optionalEnv('HS_AGGREGATION_WINDOW_MS', String(24 * 60 * 60 * 1000)), 10),
         minimalGrowthPercent: parseFloat(optionalEnv('HS_POS_CHANGE_ALERT_PERCENT', '20')),
-        minimalGrowthUSD: parseFloat(optionalEnv('HS_POS_CHANGE_ALERT_USD', '20000')),
+        minimalGrowthUSD: parseFloat(optionalEnv('HS_POS_CHANGE_ALERT_USD', '50000')),
         mainCoins: ['BTC', 'ETH', 'SOL'] as string[],
         batchSize: 1000,
         wss: 'wss://api.hyperliquid.xyz/ws',
@@ -67,7 +69,7 @@ export const config = {
         alertThresholdUsd: Number(optionalEnv('POLY_ALERT_THRESHOLD_USD', '100000')),
         sportAlertThresholdUsd: Number(optionalEnv('POLY_SPORT_BET_ALERT_THRESHOLD_USD', '500000')),
         reAlertThresholdPercent: Number(optionalEnv('POLY_RE_ALERT_THRESHOLD_PERCENT', '20')),
-        maxPriceFilter: Number(optionalEnv('POLY_MAX_PRICE_FILTER', '0.95')),
+        maxPriceFilter: Number(optionalEnv('POLY_MAX_PRICE_FILTER', '0.98')),
         url: 'https://polymarket.com',
         wss: 'wss://ws-live-data.polymarket.com',
         dataApi: 'https://data-api.polymarket.com',
@@ -75,6 +77,7 @@ export const config = {
         minTradeUSD: 50,
         dataApiRateLimit: 5,
         gammaApiRateLimit: 2,
+        batchSize: 50,
         minimalGrowthPercent: parseFloat(optionalEnv('POLY_POS_CHANGE_ALERT_PERCENT', '20')),
         minimalGrowthUSD: parseFloat(optionalEnv('POLY_POS_CHANGE_ALERT_USD', '9000')),
         batchFlushIntervalMs: 10 * 1000, // 30 seconds
@@ -90,10 +93,18 @@ export const config = {
         screenshotEnabled: optionalEnv('PUPPETEER_SCREENSHOT_ENABLED', 'true') === 'true',
         userDir: optionalEnv('PUPPETEER_USER_DIR', '') as string,
         headless: optionalEnv('PUPPETEER_HEADLESS', 'true') === 'true',
-        proxiesPath: optionalEnv('PUPPETEER_PROXIES_PATH', './resources/ports.txt') as string,
+        proxiesPath: optionalEnv('PUPPETEER_PROXIES_PATH', `${ASSETS_PATH}/ports.txt`) as string,
         proxies: optionalEnv('PUPPETEER_PROXIES', '')
             .split(',')
             .map((p) => p.trim())
             .filter((p) => p) as string[]
+    },
+    openRouter: {
+        apiKey: requireEnv('OPENROUTER_API_KEY') as string,
+        classifierPromptTemplatePath: optionalEnv(
+            'OPENROUTER_CLASSIFIER_PROMPT_TEMPLATE_PATH',
+            `${ASSETS_PATH}/trade_classifier_prompt.txt`
+        ) as string,
+        fastModel: optionalEnv('OPENROUTER_FAST_MODEL', 'gpt-3.5-turbo') as string
     }
 } as const;
