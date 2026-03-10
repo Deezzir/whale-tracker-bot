@@ -14,6 +14,7 @@ import { InlineKeyboardMarkup } from 'telegraf/types';
 import { capitalize, formatCurrency, sleep } from '../../common/utils';
 import puppeteer from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
+import ProxyService from '../proxies';
 
 interface Payload {
     type: string;
@@ -161,6 +162,9 @@ const allSportBetsPayload = {
 puppeteer.use(StealthPlugin());
 
 export default class StakeService extends Tracker {
+    private url = config.stake.url;
+    private proxy = ProxyService.getRandomProxy();
+
     private stakeCurrenciesKey = 'stake:currencies';
     private page: Page | null = null;
     private browser: Browser | null = null;
@@ -172,21 +176,30 @@ export default class StakeService extends Tracker {
         this.monitoring = true;
         this.logger.info('StakeServivce monitoring started');
 
+        const args = [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-blink-features=AutomationControlled',
+            '--display=:0',
+            '--disable-dev-shm-usage'
+        ];
+        if (this.proxy) args.push(`--proxy-server=http://${this.proxy.host}:${this.proxy.port}`);
+
         try {
             this.browser = await puppeteer.launch({
                 headless: config.puppeteer.headless,
-                userDataDir: config.puppeteer.userDir,
-                args: [
-                    '--no-sandbox',
-                    '--disable-setuid-sandbox',
-                    '--disable-blink-features=AutomationControlled',
-                    '--display=:0',
-                    '--disable-dev-shm-usage'
-                ],
+                userDataDir: config.puppeteer.userDir ? config.puppeteer.userDir : undefined,
+                args,
                 defaultViewport: { width: 1366, height: 768 }
             });
             this.page = await this.browser.newPage();
-            await this.page.goto(config.stake.url, { waitUntil: 'networkidle2' });
+            if (this.proxy)
+                await this.page.authenticate({
+                    username: this.proxy.username,
+                    password: this.proxy.password
+                });
+
+            await this.page.goto(this.url, { waitUntil: 'networkidle2' });
             this.logger.info('Puppeteer initialized');
             await sleep(10000);
         } catch (error) {
@@ -266,11 +279,26 @@ export default class StakeService extends Tracker {
         const result = this.formatAlertMessage(candidate);
         if (!result) return;
         const { msg, buttons } = result;
-        await this.tg.sendMessage(config.telegram.chatID, msg, {
-            message_thread_id: config.telegram.stakeTopicID,
-            reply_markup: buttons
-        });
-
+        let sentWithPhoto = false;
+        if (config.puppeteer.screenshotEnabled) {
+            const screenshot = await this.screenshoter.capture(
+                `${this.url}/sports/home?iid=${candidate.iid}&modal=bet`,
+                'div[data-modal-card="true"]'
+            );
+            if (screenshot) {
+                await this.tg.sendPhoto(config.telegram.chatID, screenshot, msg, {
+                    reply_markup: buttons,
+                    message_thread_id: config.telegram.stakeTopicID
+                });
+                sentWithPhoto = true;
+            }
+        }
+        if (!sentWithPhoto) {
+            await this.tg.sendMessage(config.telegram.chatID, msg, {
+                reply_markup: buttons,
+                message_thread_id: config.telegram.stakeTopicID
+            });
+        }
         await DBService.markStakeBetAlerted(candidate.id);
     }
 
@@ -348,7 +376,7 @@ export default class StakeService extends Tracker {
                     [
                         {
                             text: '🔗 View on Stake.com',
-                            url: `${config.stake.url}/sports/home?iid=${candidate.iid}&modal=bet`
+                            url: `${this.url}/sports/home?iid=${candidate.iid}&modal=bet`
                         }
                     ]
                 ]

@@ -3,7 +3,7 @@ import { config } from '../config';
 import Logger from '../common/logger';
 import { InlineKeyboardMarkup, InputFile } from 'telegraf/types';
 
-const logger = new Logger('telegram');
+const logger = new Logger('Telegram');
 
 interface SendMessageOptions {
     reply_markup?: InlineKeyboardMarkup;

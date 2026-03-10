@@ -9,7 +9,7 @@ import * as utils from './common/utils';
 import { HyperTradeDirection } from './services/db';
 import { Context } from 'telegraf';
 
-const logger = new Logger('main');
+const logger = new Logger('Main');
 const telegram: Tg = new Tg();
 const hl = new HyperliquidService(telegram);
 const stake = new StakeService(telegram);
@@ -148,9 +148,13 @@ async function stopMonitoringServices(): Promise<void> {
 
 async function shutdown(code: number): Promise<void> {
     logger.info('Shutting down...');
-    if (keepAlive) clearInterval(keepAlive);
-    telegram.stop();
-    await Promise.allSettled([closeDB(), closeRedis(), stopMonitoringServices()]);
+    try {
+        if (keepAlive) clearInterval(keepAlive);
+        telegram.stop();
+        await Promise.allSettled([closeDB(), closeRedis(), stopMonitoringServices()]);
+    } catch (error) {
+        logger.error(`Error during shutdown: ${error}`);
+    }
     logger.info('Shutdown complete.');
     process.exit(code);
 }

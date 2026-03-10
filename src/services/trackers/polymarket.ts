@@ -4,7 +4,6 @@ import { config } from '../../config';
 import PolymarketAPIService, { RawTrade } from '../api/polymarket';
 import PolymarketDBService, { PolyAggregationRecord, PolyTrade, PositionKey } from '../db/polymarket';
 import { escapeHtml, formatCurrency, formatDate } from '../../common/utils';
-import ScreenshotService from '../screenshoter';
 
 type MarketCategory = 'sport' | 'esports' | 'regular';
 type AccountTag = 'FRESH' | 'DORMANT' | 'SMALL' | 'MEDIUM' | 'LARGE';
@@ -82,8 +81,6 @@ function isEsportsMarket(title: string): boolean {
 
 export default class PolymarketService extends Tracker {
     private api = new PolymarketAPIService();
-    private screenshoter = new ScreenshotService();
-
     private tradeBatch: PolyTrade[] = [];
     private batchInterval: NodeJS.Timeout | null = null;
     private pingInterval: NodeJS.Timeout | null = null;
@@ -278,8 +275,8 @@ export default class PolymarketService extends Tracker {
 
         let messageId: number | undefined;
         let sentWithPhoto = false;
-        if (config.polymarket.screenshotEnabled) {
-            const screenshot = await this.screenshoter.capture(`https://polymarket.com/profile/${candidate.wallet}`);
+        if (config.puppeteer.screenshotEnabled) {
+            const screenshot = await this.screenshoter.capture(`${config.polymarket.url}/profile/${candidate.wallet}`);
             if (screenshot) {
                 messageId = await this.tg.sendPhoto(config.telegram.chatID, screenshot, msg, {
                     reply_markup: buttons,
@@ -328,7 +325,6 @@ export default class PolymarketService extends Tracker {
             try {
                 message = JSON.parse(rawData) as WsMessage;
             } catch {
-                this.logger.debug(`Non-JSON WS message: ${rawData}`);
                 return;
             }
             if (message.topic === 'activity' && message.type === 'orders_matched' && message.payload) {

@@ -1,7 +1,7 @@
 import mongoose, { Document, Schema } from 'mongoose';
 import Logger from '../../common/logger';
 
-const logger = new Logger('db-stake');
+const logger = new Logger('StakeDB');
 
 // Stake record schema
 export interface SwishBetOutcome {

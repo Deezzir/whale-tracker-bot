@@ -1,7 +1,7 @@
 import mongoose, { Schema, Document } from 'mongoose';
 import Logger from '../../common/logger';
 
-const logger = new Logger('db-polymarket');
+const logger = new Logger('PolymarketDB');
 
 export interface PolyTrade {
     transactionHash: string;

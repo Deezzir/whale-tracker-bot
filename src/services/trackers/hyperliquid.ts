@@ -33,8 +33,8 @@ function classifyAccountTag(
     const now = Date.now();
     if (firstTimestamp !== null && now - firstTimestamp < 7 * 24 * 60 * 60 * 1000) return 'FRESH';
     if (lastTimestamp !== null && now - lastTimestamp > 10 * 24 * 60 * 60 * 1000) return 'DORMANT';
-    if (accountValue < 10_000) return 'SMALL';
-    if (accountValue <= 100_000) return 'MEDIUM';
+    if (accountValue < 100_000) return 'SMALL';
+    if (accountValue <= 500_000) return 'MEDIUM';
     return 'LARGE';
 }
 
@@ -62,12 +62,13 @@ interface AlertContext {
 
 export default class HyperliquidService extends Tracker {
     private api = new HyperliquidAPI();
-
     private explorer = config.hyperliquid.explorer;
-    private ws: WebSocket | null = null;
-    private pingInterval: NodeJS.Timeout | null = null;
-    private coins: string[] = [];
-    private reconnecting = false;
+    private sockets: Array<{
+        ws: WebSocket | null;
+        coins: string[];
+        pingInterval: NodeJS.Timeout | null;
+        reconnecting: boolean;
+    }> = [];
     private tradeBatch: HyperTradeRecord[] = [];
     private batchInterval?: NodeJS.Timeout;
     private affectedKeys = new Map<string, PositionKey>();
@@ -84,8 +85,15 @@ export default class HyperliquidService extends Tracker {
             return;
         }
 
-        this.coins = names;
-        this.ws = this.connectWebSocket();
+        this.sockets = this.buildSocketGroups(names).map((group) => ({
+            ws: null,
+            coins: group,
+            pingInterval: null,
+            reconnecting: false
+        }));
+        for (const slot of this.sockets) {
+            slot.ws = this.connectWebSocket(slot);
+        }
 
         this.batchInterval = setInterval(() => {
             this.flushTradeBatch().catch((error) => this.logger.error(`Error flushing trade batch: ${error}`));
@@ -102,16 +110,19 @@ export default class HyperliquidService extends Tracker {
         this.logger.info('Monitoring stopped');
 
         this.affectedKeys.clear();
-        if (this.pingInterval) {
-            clearInterval(this.pingInterval);
-            this.pingInterval = null;
+        for (const slot of this.sockets) {
+            if (slot.pingInterval) {
+                clearInterval(slot.pingInterval);
+                slot.pingInterval = null;
+            }
+            if (slot.ws) {
+                slot.ws.onclose = null;
+                slot.ws.onerror = null;
+                slot.ws.close();
+                slot.ws = null;
+            }
         }
-        if (this.ws) {
-            this.ws.onclose = null;
-            this.ws.onerror = null;
-            this.ws.close();
-            this.ws = null;
-        }
+        this.sockets = [];
         if (this.batchInterval) clearInterval(this.batchInterval);
     }
 
@@ -157,7 +168,7 @@ export default class HyperliquidService extends Tracker {
                     [
                         {
                             text: '🔗 View on Hypurrscan',
-                            url: `${this.explorer}/${encodeURIComponent(trade.wallet)}`
+                            url: `${this.explorer}/address/${encodeURIComponent(trade.wallet)}`
                         }
                     ]
                 ]
@@ -205,7 +216,7 @@ export default class HyperliquidService extends Tracker {
                         [
                             {
                                 text: '🔗 View on Hypurrscan',
-                                url: `${this.explorer}/${encodeURIComponent(deleted.wallet)}`
+                                url: `${this.explorer}/address/${encodeURIComponent(deleted.wallet)}`
                             }
                         ]
                     ]
@@ -235,7 +246,7 @@ export default class HyperliquidService extends Tracker {
             for (const tracked of trackedWallets) {
                 const compressedWallet = `${tracked.wallet.slice(0, 6)}...${tracked.wallet.slice(-4)}`;
                 const directionIcon = tracked.direction === 'long' ? '🟢' : '🔴';
-                const href = `${this.explorer}/${encodeURIComponent(tracked.wallet)}`;
+                const href = `${this.explorer}/address/${encodeURIComponent(tracked.wallet)}`;
                 lines.push(`<b>Wallet</b> <a href="${href}">${escapeHtml(compressedWallet)}</a>`);
                 lines.push(`<b>Coin:</b> ${directionIcon} <code>${tracked.coin.toUpperCase()}</code>`);
                 lines.push(`<b>Size:</b> <code>$${tracked.totalNotional.toLocaleString()}</code>`);
@@ -287,7 +298,7 @@ export default class HyperliquidService extends Tracker {
 
         const alertNoDataLoop = this.alertNoData(config.monitor.noDataTimeoutMs, async () => {
             this.logger.warn('Forcing WebSocket reconnection due to no data received.');
-            this.reconnectWebSocket();
+            for (const slot of this.sockets) this.reconnectWebSocket(slot);
         });
 
         await Promise.all([scanLoop(), cleanupLoop(), trackLoop(), alertNoDataLoop]);
@@ -484,18 +495,28 @@ export default class HyperliquidService extends Tracker {
         const result = this.formatAlertMessage(candidate.coin, candidate.wallet, alertContext);
         if (!result) return;
         const { msg, buttons } = result;
+        const topic = config.hyperliquid.mainCoins.includes(candidate.coin)
+            ? config.telegram.hsMainTopicID
+            : config.telegram.hsOtherTopicID;
         let messageId: number | undefined;
+        let sentWithPhoto = false;
 
-        if (config.hyperliquid.mainCoins.includes(candidate.coin))
+        if (config.puppeteer.screenshotEnabled) {
+            const screenshot = await this.screenshoter.capture(`${this.explorer}/address/${candidate.wallet}#perps`);
+            if (screenshot) {
+                messageId = await this.tg.sendPhoto(config.telegram.chatID, screenshot, msg, {
+                    reply_markup: buttons,
+                    message_thread_id: topic
+                });
+                sentWithPhoto = true;
+            }
+        }
+        if (!sentWithPhoto) {
             messageId = await this.tg.sendMessage(config.telegram.chatID, msg, {
-                message_thread_id: config.telegram.hsMainTopicID,
+                message_thread_id: topic,
                 reply_markup: buttons
             });
-        else
-            messageId = await this.tg.sendMessage(config.telegram.chatID, msg, {
-                message_thread_id: config.telegram.hsOtherTopicID,
-                reply_markup: buttons
-            });
+        }
 
         await HyperliquidDBService.insertAlert({
             wallet: candidate.wallet,
@@ -507,42 +528,71 @@ export default class HyperliquidService extends Tracker {
         });
     }
 
-    private reconnectWebSocket(): void {
-        if (this.reconnecting) return;
-        this.reconnecting = true;
+    private buildSocketGroups(names: string[]): string[][] {
+        const groups: string[][] = [];
+        const rest = names.filter((c) => c !== 'BTC' && c !== 'ETH' && c !== 'SOL');
 
-        if (this.pingInterval) {
-            clearInterval(this.pingInterval);
-            this.pingInterval = null;
+        groups.push(['BTC']);
+        groups.push(['ETH']);
+        groups.push(['SOL']);
+
+        const numRestSockets = 10 - groups.length;
+        const chunkSize = Math.ceil(rest.length / numRestSockets);
+        for (let i = 0; i < rest.length; i += chunkSize) {
+            groups.push(rest.slice(i, i + chunkSize));
         }
-        if (this.ws) {
-            this.ws.onclose = null;
-            this.ws.onerror = null;
-            this.ws.close();
-            this.ws = null;
+
+        return groups;
+    }
+
+    private reconnectWebSocket(slot: {
+        ws: WebSocket | null;
+        coins: string[];
+        pingInterval: NodeJS.Timeout | null;
+        reconnecting: boolean;
+    }): void {
+        if (slot.reconnecting) return;
+        slot.reconnecting = true;
+
+        if (slot.pingInterval) {
+            clearInterval(slot.pingInterval);
+            slot.pingInterval = null;
+        }
+        if (slot.ws) {
+            slot.ws.onclose = null;
+            slot.ws.onerror = null;
+            slot.ws.close();
+            slot.ws = null;
         }
 
         if (this.monitoring) {
             setTimeout(() => {
-                this.reconnecting = false;
+                slot.reconnecting = false;
                 if (this.monitoring) {
-                    this.ws = this.connectWebSocket();
+                    slot.ws = this.connectWebSocket(slot);
                 }
             }, 5000);
         } else {
-            this.reconnecting = false;
+            slot.reconnecting = false;
         }
     }
 
-    private connectWebSocket(): WebSocket {
+    private connectWebSocket(slot: {
+        ws: WebSocket | null;
+        coins: string[];
+        pingInterval: NodeJS.Timeout | null;
+        reconnecting: boolean;
+    }): WebSocket {
         const ws = new WebSocket(config.hyperliquid.wss);
 
         ws.onopen = () => {
-            this.logger.info(`WebSocket connected, subscribing to ${this.coins.length} coins`);
-            for (const coin of this.coins) {
+            this.logger.info(
+                `WebSocket connected, subscribing to ${slot.coins.length} coins: ${slot.coins.join(', ')}`
+            );
+            for (const coin of slot.coins) {
                 ws.send(JSON.stringify({ method: 'subscribe', subscription: { type: 'trades', coin } }));
             }
-            this.pingInterval = setInterval(() => {
+            slot.pingInterval = setInterval(() => {
                 if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ method: 'ping' }));
             }, 30000);
         };
@@ -567,13 +617,13 @@ export default class HyperliquidService extends Tracker {
 
         ws.onerror = (error) => {
             this.logger.error(`WebSocket error: ${error}`);
-            if (ws.readyState !== WebSocket.OPEN) this.reconnectWebSocket();
+            if (ws.readyState !== WebSocket.OPEN) this.reconnectWebSocket(slot);
         };
 
         ws.onclose = (event) => {
             const reason = event.reason || 'unknown';
             this.logger.info(`WebSocket closed, reason: ${reason}`);
-            this.reconnectWebSocket();
+            this.reconnectWebSocket(slot);
         };
 
         return ws;
@@ -711,7 +761,7 @@ export default class HyperliquidService extends Tracker {
                     [
                         {
                             text: '🔗 View on Hypurrscan',
-                            url: `${this.explorer}/${encodeURIComponent(buyer)}`
+                            url: `${this.explorer}/address/${encodeURIComponent(buyer)}`
                         }
                     ],
                     [Markup.button.callback('📌 Track Wallet', `track:${context.id}`, true)]
@@ -854,7 +904,7 @@ export default class HyperliquidService extends Tracker {
                 [
                     {
                         text: '🔗 View on Hypurrscan',
-                        url: `${this.explorer}/${encodeURIComponent(wallet)}`
+                        url: `${this.explorer}/address/${encodeURIComponent(wallet)}`
                     }
                 ],
                 reason !== 'closed' && reason !== 'liquidated'

@@ -1,7 +1,7 @@
 import mongoose, { Document, Schema } from 'mongoose';
 import Logger from '../../common/logger';
 
-const logger = new Logger('db-hyperliquid');
+const logger = new Logger('HyperliquidDB');
 
 // Hyperliquid wallet aggregation schema
 export type HyperTradeDirection = 'long' | 'short';

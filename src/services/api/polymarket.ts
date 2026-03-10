@@ -4,7 +4,7 @@ import { config } from '../../config';
 import { getRedisClient } from '../redis';
 import Logger from '../../common/logger';
 
-const logger = new Logger('polymarket-api');
+const logger = new Logger('PolymarketApi');
 
 interface Market {
     conditionId: string;

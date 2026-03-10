@@ -47,7 +47,7 @@ export const config = {
         batchSize: 1000,
         wss: 'wss://api.hyperliquid.xyz/ws',
         api: 'https://api.hyperliquid.xyz/info',
-        explorer: 'https://hypurrscan.io/address',
+        explorer: 'https://hypurrscan.io',
         freshWindowMs: 2 * 24 * 60 * 60 * 1000, // 2 days,
         checkIntervalMs: 30 * 60 * 1000, // 30 minutes
         batchFlushIntervalMs: 60 * 1000, // 1 minute
@@ -68,7 +68,7 @@ export const config = {
         sportAlertThresholdUsd: Number(optionalEnv('POLY_SPORT_BET_ALERT_THRESHOLD_USD', '500000')),
         reAlertThresholdPercent: Number(optionalEnv('POLY_RE_ALERT_THRESHOLD_PERCENT', '20')),
         maxPriceFilter: Number(optionalEnv('POLY_MAX_PRICE_FILTER', '0.95')),
-        screenshotEnabled: optionalEnv('POLY_SCREENSHOT_ENABLED', 'true') === 'true',
+        url: 'https://polymarket.com',
         wss: 'wss://ws-live-data.polymarket.com',
         dataApi: 'https://data-api.polymarket.com',
         gammaApi: 'https://gamma-api.polymarket.com',
@@ -87,7 +87,10 @@ export const config = {
         redisPassword: optionalEnv('REDIS_PASSWORD', '') as string
     },
     puppeteer: {
-        userDir: optionalEnv('PUPPETEER_USER_DIR', './.data/puppeteer') as string,
-        headless: optionalEnv('PUPPETEER_HEADLESS', 'true') === 'true'
+        screenshotEnabled: optionalEnv('PUPPETEER_SCREENSHOT_ENABLED', 'true') === 'true',
+        userDir: optionalEnv('PUPPETEER_USER_DIR', '') as string,
+        headless: optionalEnv('PUPPETEER_HEADLESS', 'true') === 'true',
+        proxiesPath: optionalEnv('PUPPETEER_PROXIES_PATH', './resources/ports.txt') as string,
+        proxies: optionalEnv('PUPPETEER_PROXIES', '').split(',').map(p => p.trim()).filter(p => p) as string[]
     }
 } as const;

@@ -5,7 +5,7 @@ import { config, Environment } from '../../config';
 import mongoose from 'mongoose';
 import Logger from '../../common/logger';
 
-const logger = new Logger('db');
+const logger = new Logger('DB');
 
 function getDBName() {
     return config.env === Environment.Development ? config.db.dbName + '-dev' : config.db.dbName;

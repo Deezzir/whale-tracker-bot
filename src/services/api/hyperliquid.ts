@@ -5,7 +5,7 @@ import Logger from '../../common/logger';
 import { getRedisClient } from '../redis';
 import { HyperTradeDirection } from '../db/hyperliquid';
 
-const logger = new Logger('hyperliquid-api');
+const logger = new Logger('HyperliquidApi');
 
 type PortfolioHistoryPoint = [number, string];
 

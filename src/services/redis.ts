@@ -2,7 +2,7 @@ import { createClient } from 'redis';
 import { config } from '../config';
 import Logger from '../common/logger';
 
-const logger = new Logger('redis');
+const logger = new Logger('Redis');
 
 const redis = createClient({
     url: config.db.redisURL,

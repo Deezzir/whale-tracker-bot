@@ -4,9 +4,12 @@ import { config } from '../config';
 import Logger from './logger';
 import { sleep } from './utils';
 import { Mutex } from './mutex';
+import ScreenshotService from '../services/screenshoter';
 
 export abstract class Tracker {
     protected name: string = this.constructor.name;
+
+    protected screenshoter = new ScreenshotService();
 
     protected logger = new Logger(this.name);
     protected tg: Tg;
