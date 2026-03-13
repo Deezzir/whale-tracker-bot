@@ -6,12 +6,18 @@ import { sleep } from './utils';
 import { Mutex } from './mutex';
 import ScreenshotService from '../services/screenshoter';
 
+export interface ChatChannel {
+    chatId: number;
+    topicId?: number;
+}
+
 export abstract class Tracker {
     protected screenshoter: ScreenshotService;
-
+    protected useProxy: boolean;
     protected name: string = this.constructor.name;
     protected logger = new Logger(this.name);
     protected tg: Tg;
+    protected channels: ChatChannel[];
 
     protected redis = getRedisClient();
     protected monitoring = false;
@@ -20,8 +26,10 @@ export abstract class Tracker {
     protected lastDataTimestamp: number = Date.now();
     protected alertNoDataInterval: NodeJS.Timeout | null = null;
 
-    constructor(tg: Tg, useProxyForScreenshots = false) {
+    constructor(tg: Tg, channels: ChatChannel[], useProxy = false, useProxyForScreenshots = false) {
         this.tg = tg;
+        this.channels = channels;
+        this.useProxy = useProxy;
         this.screenshoter = new ScreenshotService(useProxyForScreenshots);
     }
 

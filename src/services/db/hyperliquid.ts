@@ -76,6 +76,7 @@ interface HyperAlert {
     totalNotional: number;
     direction: HyperTradeDirection;
     sentAt: Date;
+    chatId: number;
     messageId?: number;
 }
 
@@ -88,12 +89,13 @@ const HyperAlertSchema = new Schema<HyperAlertDocument>(
         direction: { type: String, required: true, enum: ['long', 'short'] },
         totalNotional: { type: Number, required: true },
         sentAt: { type: Date, required: true },
+        chatId: { type: Number, required: true },
         messageId: { type: Number }
     },
     { timestamps: true }
 );
 
-HyperAlertSchema.index({ wallet: 1, coin: 1, direction: 1 });
+HyperAlertSchema.index({ wallet: 1, coin: 1, direction: 1, chatId: 1 });
 
 const HyperAlertModel =
     mongoose.models.HyperAlert || mongoose.model<HyperAlertDocument>('HyperAlert', HyperAlertSchema);
@@ -367,17 +369,26 @@ export default class HyperliquidDBService {
         }
     }
 
-    static async getLastAlert(
+    static async getLastAlerts(
         wallet: string,
         coin: string,
-        direction: HyperTradeDirection
-    ): Promise<HyperAlert | null> {
+        direction: HyperTradeDirection,
+        chatIds: number[]
+    ): Promise<Map<number, HyperAlert>> {
+        if (chatIds.length === 0) return new Map();
         try {
-            return HyperAlertModel.findOne({ wallet, coin, direction }, null, { sort: { sentAt: -1 } })
-                .lean()
-                .exec() as Promise<HyperAlert | null>;
+            const docs = await HyperAlertModel.aggregate<{ _id: number; doc: HyperAlert }>([
+                { $match: { wallet, coin, direction, chatId: { $in: chatIds } } },
+                { $sort: { sentAt: -1 } },
+                { $group: { _id: '$chatId', doc: { $first: '$$ROOT' } } }
+            ]);
+            const result = new Map<number, HyperAlert>();
+            for (const { _id, doc } of docs) {
+                result.set(_id, doc);
+            }
+            return result;
         } catch (error) {
-            logger.error(`Error retrieving last alert for wallet ${wallet}: ${error}`);
+            logger.error(`Error retrieving last alerts for wallet ${wallet}: ${error}`);
             throw error;
         }
     }

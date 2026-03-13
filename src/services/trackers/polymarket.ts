@@ -19,7 +19,7 @@ interface AlertMessageData {
     positionUSD: number;
     outcome: string;
     marketTitle: string;
-    marketSlug?: string;
+    eventTicker: string;
     wallet: string;
     tags: string[];
     nickname: string | null;
@@ -192,12 +192,18 @@ export default class PolymarketService extends Tracker {
         ]);
 
         const title = candidate.title;
-        const tags = marketInfo ? marketInfo.tags.map((t) => t.label) : [];
+        const tags = marketInfo ? (marketInfo.tags || []).map((t) => t.label) : [];
+        const eventTicker =
+            marketInfo && marketInfo.events && marketInfo.events.length > 0
+                ? marketInfo.events[0].ticker
+                : marketInfo
+                  ? marketInfo.slug
+                  : 'unknown';
         const category: MarketCategory = isEsportsMarket(title)
             ? 'esports'
             : isSportMarket(title)
-                ? 'sport'
-                : 'regular';
+              ? 'sport'
+              : 'regular';
         const threshold =
             category === 'sport' ? config.polymarket.sportAlertThresholdUsd : config.polymarket.alertThresholdUsd;
         if (candidate.netUsd < threshold) {
@@ -215,15 +221,19 @@ export default class PolymarketService extends Tracker {
         const tradeTag = classifyTradeTag(candidate.netUsd, walletStats.buyTradeAmounts);
         const tradeMedianUSD = getMedianAmount(walletStats.buyTradeAmounts);
 
-        const lastAlert = await PolymarketDBService.getLastAlert(
+        const lastAlerts = await PolymarketDBService.getLastAlerts(
             candidate.wallet,
             candidate.conditionId,
-            candidate.outcomeIndex
+            candidate.outcomeIndex,
+            this.channels.map((c) => c.chatId)
         );
-        if (lastAlert) {
-            const growth = candidate.netUsd - lastAlert.positionUsd;
+        if (lastAlerts.size > 0) {
+            const latestAlert = [...lastAlerts.values()].reduce((a, b) =>
+                new Date(a.sentAt) > new Date(b.sentAt) ? a : b
+            );
+            const growth = candidate.netUsd - latestAlert.positionUsd;
             const dynamicThreshold = Math.max(
-                (lastAlert.positionUsd * config.polymarket.minimalGrowthPercent) / 100,
+                (latestAlert.positionUsd * config.polymarket.minimalGrowthPercent) / 100,
                 config.polymarket.minimalGrowthUSD
             );
             if (growth < dynamicThreshold) {
@@ -236,24 +246,30 @@ export default class PolymarketService extends Tracker {
             this.logger.info(
                 `Position growth detected for ${candidate.wallet} (${candidate.conditionId}): growth ${growth} >= dynamicThreshold ${dynamicThreshold}, sending update alert`
             );
-            const replyText = this.formatGrowingPositionMessage(candidate.netUsd, lastAlert.positionUsd);
-            let messageId: number | undefined = lastAlert.messageId;
-            if (lastAlert.messageId) {
-                await this.tg.sendReply(config.telegram.chatID, replyText, lastAlert.messageId);
-            } else {
-                messageId = await this.tg.sendMessage(config.telegram.chatID, replyText, {
-                    message_thread_id: config.telegram.polyTopicID
+            const replyText = this.formatGrowingPositionMessage(candidate.netUsd, latestAlert.positionUsd);
+            for (let i = 0; i < this.channels.length; i++) {
+                if (i > 0) await sleep(1000);
+                const channel = this.channels[i];
+                const prevAlert = lastAlerts.get(channel.chatId);
+                let messageId: number | undefined;
+                if (prevAlert?.messageId) {
+                    await this.tg.sendReply(channel.chatId, replyText, prevAlert.messageId);
+                    messageId = prevAlert.messageId;
+                } else {
+                    messageId = await this.tg.sendMessage(channel.chatId, replyText, {
+                        message_thread_id: channel.topicId
+                    });
+                }
+                await PolymarketDBService.insertAlert({
+                    proxyWallet: candidate.wallet,
+                    conditionId: candidate.conditionId,
+                    outcomeIndex: candidate.outcomeIndex,
+                    positionUsd: candidate.netUsd,
+                    sentAt: new Date(),
+                    chatId: channel.chatId,
+                    messageId
                 });
             }
-
-            await PolymarketDBService.insertAlert({
-                proxyWallet: candidate.wallet,
-                conditionId: candidate.conditionId,
-                outcomeIndex: candidate.outcomeIndex,
-                positionUsd: candidate.netUsd,
-                sentAt: new Date(),
-                messageId
-            });
             return;
         }
 
@@ -264,7 +280,7 @@ export default class PolymarketService extends Tracker {
             positionUSD: candidate.netUsd,
             outcome: candidate.outcome,
             marketTitle: title || 'Unknown Market',
-            marketSlug: candidate.slug,
+            eventTicker: eventTicker,
             tags,
             wallet: candidate.wallet,
             nickname: walletInfo.nickname,
@@ -394,12 +410,13 @@ export default class PolymarketService extends Tracker {
             `<b>Trade:</b> ${tagLabel(data.tradeTag)}`,
             `<b>Trade Median:</b> ${formatCurrency(data.tradeMedianUSD)}`,
             ``,
-            `${data.tags.length > 0
-                ? data.tags
-                    .slice(0, 2)
-                    .map((t) => `${escapeHtml(t)}`)
-                    .join(', ')
-                : ''
+            `${
+                data.tags.length > 0
+                    ? data.tags
+                          .slice(0, 2)
+                          .map((t) => `${escapeHtml(t)}`)
+                          .join(', ')
+                    : ''
             }`,
             ``
         ];
@@ -415,7 +432,7 @@ export default class PolymarketService extends Tracker {
                         },
                         {
                             text: '📊 Market',
-                            url: `https://polymarket.com/event/${data.marketSlug}`
+                            url: `https://polymarket.com/event/${data.eventTicker}`
                         }
                     ]
                 ]
@@ -457,48 +474,42 @@ export default class PolymarketService extends Tracker {
         };
     }
 
-    private async sendAlert(candidate: PolyAggregationRecord, msg: string, buttons: InlineKeyboardMarkup): Promise<void> {
-        const otherChatId = -1003468238602;
-        const otherTopicId = 10961;
-
+    private async sendAlert(
+        candidate: PolyAggregationRecord,
+        msg: string,
+        buttons: InlineKeyboardMarkup
+    ): Promise<void> {
         try {
-            let messageId: number | undefined;
-            let sentWithPhoto = false;
+            let screenshot: Buffer | null = null;
             if (config.puppeteer.screenshotEnabled) {
-                const screenshot = await this.screenshoter.capture(`${config.polymarket.url}/profile/${candidate.wallet}`);
-                if (screenshot) {
-                    /* FIXME -------------------------------------*/
-                    await this.tg.sendPhoto(otherChatId, screenshot, msg, { reply_markup: buttons, message_thread_id: otherTopicId });
-                    await sleep(1000);
-                    /*--------------------------------------------*/
-
-                    messageId = await this.tg.sendPhoto(config.telegram.chatID, screenshot, msg, {
-                        reply_markup: buttons,
-                        message_thread_id: config.telegram.polyTopicID
-                    });
-                    sentWithPhoto = true;
-                }
+                screenshot = await this.screenshoter.capture(`${config.polymarket.url}/profile/${candidate.wallet}`);
             }
-            if (!sentWithPhoto) {
-                /* FIXME -------------------------------------*/
-                await this.tg.sendMessage(otherChatId, msg, { reply_markup: buttons, message_thread_id: otherTopicId });
-                await sleep(1000);
-                /*--------------------------------------------*/
 
-                messageId = await this.tg.sendMessage(config.telegram.chatID, msg, {
-                    reply_markup: buttons,
-                    message_thread_id: config.telegram.polyTopicID
+            for (let i = 0; i < this.channels.length; i++) {
+                if (i > 0) await sleep(1000);
+                const channel = this.channels[i];
+                let messageId: number | undefined;
+                if (screenshot) {
+                    messageId = await this.tg.sendPhoto(channel.chatId, screenshot, msg, {
+                        reply_markup: buttons,
+                        message_thread_id: channel.topicId
+                    });
+                } else {
+                    messageId = await this.tg.sendMessage(channel.chatId, msg, {
+                        reply_markup: buttons,
+                        message_thread_id: channel.topicId
+                    });
+                }
+                await PolymarketDBService.insertAlert({
+                    proxyWallet: candidate.wallet,
+                    conditionId: candidate.conditionId,
+                    outcomeIndex: candidate.outcomeIndex,
+                    positionUsd: candidate.netUsd,
+                    sentAt: new Date(),
+                    chatId: channel.chatId,
+                    messageId
                 });
             }
-
-            await PolymarketDBService.insertAlert({
-                proxyWallet: candidate.wallet,
-                conditionId: candidate.conditionId,
-                outcomeIndex: candidate.outcomeIndex,
-                positionUsd: candidate.netUsd,
-                sentAt: new Date(),
-                messageId
-            });
         } catch (error) {
             this.logger.error(`Failed to send alert for ${candidate.wallet} (${candidate.conditionId}): ${error}`);
         }

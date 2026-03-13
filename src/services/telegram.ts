@@ -2,6 +2,7 @@ import { Context, Telegraf } from 'telegraf';
 import { config } from '../config';
 import Logger from '../common/logger';
 import { InlineKeyboardMarkup, InputFile } from 'telegraf/types';
+import { getRedisClient } from './redis';
 
 const logger = new Logger('Telegram');
 
@@ -26,6 +27,7 @@ export default class TelegramService {
         if (!this.handlerRegistrar) {
             throw new Error('Handlers must be registered via registerHandlers() before starting TelegramService.');
         }
+        this.registerInternalHandlers();
         this.handlerRegistrar(this.bot);
         await this.ensureBotReady();
         await this.bot.launch(() => {
@@ -47,7 +49,35 @@ export default class TelegramService {
         return this.bot;
     }
 
+    private registerInternalHandlers(): void {
+        this.bot.on('message', async (ctx, next) => {
+            const msg = ctx.message;
+            // @ts-ignore
+            if (msg && msg.pinned_message) {
+                try {
+                    await ctx.deleteMessage(msg.message_id);
+                } catch (err) {
+                    logger.warn(`Failed to delete pin service message: ${err}`);
+                }
+            }
+            return next();
+        });
+    }
+
     private async sendStartupMessage(): Promise<void> {
+        const STARTUP_MSG_KEY = 'bot:startup_message_id';
+        const redis = getRedisClient();
+
+        const oldMsgId = await redis.get(STARTUP_MSG_KEY);
+        if (oldMsgId) {
+            try {
+                await this.bot.telegram.unpinChatMessage(config.telegram.chatID, Number(oldMsgId));
+                await this.bot.telegram.deleteMessage(config.telegram.chatID, Number(oldMsgId));
+            } catch (err) {
+                logger.warn(`Failed to delete old startup message (id=${oldMsgId}): ${err}`);
+            }
+        }
+
         const fmt = (n: number) => `$${n.toLocaleString('en-US')}`;
         const message = [
             `<b>🟢 Whale Tracker Bot</b>`,
@@ -71,8 +101,10 @@ export default class TelegramService {
             `└─`
         ].join('\n');
 
-        await this.sendMessage(config.telegram.chatID, message);
-        logger.info('Startup message sent');
+        const msgId = await this.sendMessage(config.telegram.chatID, message);
+        await this.bot.telegram.pinChatMessage(config.telegram.chatID, msgId, { disable_notification: true });
+        await redis.set(STARTUP_MSG_KEY, msgId);
+        logger.info('Startup message sent and pinned');
     }
 
     public async sendMessage(chatID: number, message: string, extra?: SendMessageOptions): Promise<number> {

@@ -22,8 +22,12 @@ export interface Market {
     negRisk: boolean;
     orderPriceMinTickSize: string;
     tokenIds: { up: string; down: string };
-    tags: {
+    tags?: {
         label: string;
+    }[];
+    events?: {
+        ticker: string;
+        id: string;
     }[];
 }
 

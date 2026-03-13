@@ -11,9 +11,22 @@ import { Context } from 'telegraf';
 
 const logger = new Logger('Main');
 const telegram: Tg = new Tg();
-const hl = new HyperliquidService(telegram, false);
-const stake = new StakeService(telegram, true);
-const poly = new PolymarketService(telegram, false);
+const hl = new HyperliquidService(
+    telegram,
+    [{ chatId: config.telegram.chatID, topicId: config.telegram.hsMainTopicID }],
+    [{ chatId: config.telegram.chatID, topicId: config.telegram.hsOtherTopicID }],
+    [{ chatId: config.telegram.chatID, topicId: config.telegram.trackTopicID }]
+);
+const stake = new StakeService(
+    telegram,
+    [{ chatId: config.telegram.chatID, topicId: config.telegram.stakeTopicID }],
+    false,
+    true
+);
+const poly = new PolymarketService(telegram, [
+    { chatId: config.telegram.chatID, topicId: config.telegram.polyTopicID },
+    { chatId: -1003468238602, topicId: 10961 }
+]);
 const services: Tracker[] = [hl, stake, poly];
 
 let keepAlive: NodeJS.Timeout;

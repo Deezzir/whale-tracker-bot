@@ -163,7 +163,7 @@ puppeteer.use(StealthPlugin());
 
 export default class StakeService extends Tracker {
     private url = config.stake.url;
-    private proxy: Proxy | null = ProxyService.getRandomProxy();
+    private proxy: Proxy | null = this.useProxy ? ProxyService.getRandomProxy() : null;
 
     private stakeCurrenciesKey = 'stake:currencies';
     private page: Page | null = null;
@@ -209,7 +209,7 @@ export default class StakeService extends Tracker {
             this.monitoring = false;
             this.page = null;
             this.logger.error(`Error initializing Puppeteer: ${error}`);
-            this.tg.sendMessage(config.telegram.chatID, 'Unable to start stake monitoring.');
+            for (const ch of this.channels) this.tg.sendMessage(ch.chatId, 'Unable to start stake monitoring.');
             return;
         }
 
@@ -282,25 +282,29 @@ export default class StakeService extends Tracker {
         const result = this.formatAlertMessage(candidate);
         if (!result) return;
         const { msg, buttons } = result;
-        let sentWithPhoto = false;
+
+        let screenshot: Buffer | null = null;
         if (config.puppeteer.screenshotEnabled) {
-            const screenshot = await this.screenshoter.capture(
+            screenshot = await this.screenshoter.capture(
                 `${this.url}/sports/home?iid=${candidate.iid}&modal=bet`,
                 'div[data-modal-card="true"]'
             );
-            if (screenshot) {
-                await this.tg.sendPhoto(config.telegram.chatID, screenshot, msg, {
-                    reply_markup: buttons,
-                    message_thread_id: config.telegram.stakeTopicID
-                });
-                sentWithPhoto = true;
-            }
         }
-        if (!sentWithPhoto) {
-            await this.tg.sendMessage(config.telegram.chatID, msg, {
-                reply_markup: buttons,
-                message_thread_id: config.telegram.stakeTopicID
-            });
+
+        for (let i = 0; i < this.channels.length; i++) {
+            if (i > 0) await sleep(1000);
+            const channel = this.channels[i];
+            if (screenshot) {
+                await this.tg.sendPhoto(channel.chatId, screenshot, msg, {
+                    reply_markup: buttons,
+                    message_thread_id: channel.topicId
+                });
+            } else {
+                await this.tg.sendMessage(channel.chatId, msg, {
+                    reply_markup: buttons,
+                    message_thread_id: channel.topicId
+                });
+            }
         }
         await DBService.markStakeBetAlerted(candidate.id);
     }
@@ -434,7 +438,7 @@ export default class StakeService extends Tracker {
 
         try {
             if (this.page) {
-                await this.page.close().catch(() => { });
+                await this.page.close().catch(() => {});
                 this.page = null;
             }
             await sleep(2000);
@@ -484,7 +488,7 @@ export default class StakeService extends Tracker {
                     if (manager[wsKey]) {
                         try {
                             manager[wsKey].close();
-                        } catch { }
+                        } catch {}
                         manager[wsKey] = null;
                     }
                     if (manager[intervalKey]) {

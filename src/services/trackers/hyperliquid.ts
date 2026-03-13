@@ -1,8 +1,9 @@
 import { config } from '../../config';
 import { Markup } from 'telegraf';
 import { InlineKeyboardMarkup } from 'telegraf/types';
-import { Tracker } from '../../common/tracker';
-import { escapeHtml, formatCurrency } from '../../common/utils';
+import { ChatChannel, Tracker } from '../../common/tracker';
+import { escapeHtml, formatCurrency, sleep } from '../../common/utils';
+import Tg from '../telegram';
 import HyperliquidDBService, {
     HyperAggregationRecord,
     HyperTrackedRecord,
@@ -63,6 +64,9 @@ interface AlertContext {
 export default class HyperliquidService extends Tracker {
     private api = new HyperliquidAPI();
     private explorer = config.hyperliquid.explorer;
+    private mainChannels: ChatChannel[];
+    private otherChannels: ChatChannel[];
+    private trackChannels: ChatChannel[];
     private sockets: Array<{
         ws: WebSocket | null;
         coins: string[];
@@ -73,6 +77,19 @@ export default class HyperliquidService extends Tracker {
     private batchInterval?: NodeJS.Timeout;
     private affectedKeys = new Map<string, PositionKey>();
 
+    constructor(
+        tg: Tg,
+        mainChannels: ChatChannel[],
+        otherChannels: ChatChannel[],
+        trackChannels: ChatChannel[],
+        useProxy = false
+    ) {
+        super(tg, mainChannels, useProxy);
+        this.mainChannels = mainChannels;
+        this.otherChannels = otherChannels;
+        this.trackChannels = trackChannels;
+    }
+
     async start(): Promise<void> {
         if (this.monitoring) return;
         this.monitoring = true;
@@ -80,7 +97,7 @@ export default class HyperliquidService extends Tracker {
 
         const names = await this.api.fetchCoins();
         if (names.length === 0) {
-            this.tg.sendMessage(config.telegram.chatID, 'Unable to load trading universes.');
+            for (const ch of this.mainChannels) this.tg.sendMessage(ch.chatId, 'Unable to load trading universes.');
             this.monitoring = false;
             return;
         }
@@ -433,15 +450,24 @@ export default class HyperliquidService extends Tracker {
             return;
         }
 
-        const lastAlert = await HyperliquidDBService.getLastAlert(
+        const alertChannels = config.hyperliquid.mainCoins.includes(candidate.coin)
+            ? this.mainChannels
+            : this.otherChannels;
+
+        const lastAlerts = await HyperliquidDBService.getLastAlerts(
             candidate.wallet,
             candidate.coin,
-            candidate.direction
+            candidate.direction,
+            alertChannels.map((c) => c.chatId)
         );
-        if (lastAlert) {
-            const growth = candidate.totalNotional - lastAlert.totalNotional;
+
+        if (lastAlerts.size > 0) {
+            const latestAlert = [...lastAlerts.values()].reduce((a, b) =>
+                new Date(a.sentAt) > new Date(b.sentAt) ? a : b
+            );
+            const growth = candidate.totalNotional - latestAlert.totalNotional;
             const dynamicThreshold = Math.max(
-                (lastAlert.totalNotional * config.hyperliquid.minimalGrowthPercent) / 100,
+                (latestAlert.totalNotional * config.hyperliquid.minimalGrowthPercent) / 100,
                 config.hyperliquid.minimalGrowthUSD
             );
             if (growth < dynamicThreshold) {
@@ -454,23 +480,30 @@ export default class HyperliquidService extends Tracker {
             this.logger.info(
                 `Position growth detected for ${candidate.wallet} ${candidate.coin} (${candidate.direction}): growth ${growth} >= dynamicThreshold ${dynamicThreshold}, sending update alert`
             );
-            const replyText = this.formatGrowingPositionMessage(candidate.totalNotional, lastAlert.totalNotional);
-            let messageId: number | undefined = lastAlert.messageId;
-            if (lastAlert.messageId) {
-                await this.tg.sendReply(config.telegram.chatID, replyText, lastAlert.messageId);
-            } else {
-                messageId = await this.tg.sendMessage(config.telegram.chatID, replyText, {
-                    message_thread_id: config.telegram.polyTopicID
+            const replyText = this.formatGrowingPositionMessage(candidate.totalNotional, latestAlert.totalNotional);
+            for (let i = 0; i < alertChannels.length; i++) {
+                if (i > 0) await sleep(1000);
+                const channel = alertChannels[i];
+                const prevAlert = lastAlerts.get(channel.chatId);
+                let messageId: number | undefined;
+                if (prevAlert?.messageId) {
+                    await this.tg.sendReply(channel.chatId, replyText, prevAlert.messageId);
+                    messageId = prevAlert.messageId;
+                } else {
+                    messageId = await this.tg.sendMessage(channel.chatId, replyText, {
+                        message_thread_id: channel.topicId
+                    });
+                }
+                await HyperliquidDBService.insertAlert({
+                    wallet: candidate.wallet,
+                    coin: candidate.coin,
+                    direction: candidate.direction,
+                    totalNotional: candidate.totalNotional,
+                    sentAt: new Date(),
+                    chatId: channel.chatId,
+                    messageId
                 });
             }
-            await HyperliquidDBService.insertAlert({
-                wallet: candidate.wallet,
-                coin: candidate.coin,
-                direction: candidate.direction,
-                totalNotional: candidate.totalNotional,
-                sentAt: new Date(),
-                messageId
-            });
             return;
         }
 
@@ -495,14 +528,10 @@ export default class HyperliquidService extends Tracker {
         const result = this.formatAlertMessage(candidate.coin, candidate.wallet, alertContext);
         if (!result) return;
         const { msg, buttons } = result;
-        const topic = config.hyperliquid.mainCoins.includes(candidate.coin)
-            ? config.telegram.hsMainTopicID
-            : config.telegram.hsOtherTopicID;
-        let messageId: number | undefined;
-        let sentWithPhoto = false;
 
+        let screenshot: Buffer | null = null;
         if (config.puppeteer.screenshotEnabled) {
-            const screenshot = await this.screenshoter.capture(
+            screenshot = await this.screenshoter.capture(
                 `${this.explorer}/address/${candidate.wallet}#perps`,
                 undefined,
                 () => {
@@ -519,29 +548,32 @@ export default class HyperliquidService extends Tracker {
                     return !isNaN(num) && num > 0;
                 }
             );
-            if (screenshot) {
-                messageId = await this.tg.sendPhoto(config.telegram.chatID, screenshot, msg, {
-                    reply_markup: buttons,
-                    message_thread_id: topic
-                });
-                sentWithPhoto = true;
-            }
         }
-        if (!sentWithPhoto) {
-            messageId = await this.tg.sendMessage(config.telegram.chatID, msg, {
-                message_thread_id: topic,
-                reply_markup: buttons
+        for (let i = 0; i < alertChannels.length; i++) {
+            if (i > 0) await sleep(1000);
+            const channel = alertChannels[i];
+            let messageId: number | undefined;
+            if (screenshot) {
+                messageId = await this.tg.sendPhoto(channel.chatId, screenshot, msg, {
+                    reply_markup: buttons,
+                    message_thread_id: channel.topicId
+                });
+            } else {
+                messageId = await this.tg.sendMessage(channel.chatId, msg, {
+                    message_thread_id: channel.topicId,
+                    reply_markup: buttons
+                });
+            }
+            await HyperliquidDBService.insertAlert({
+                wallet: candidate.wallet,
+                coin: candidate.coin,
+                direction: candidate.direction,
+                totalNotional: candidate.totalNotional,
+                sentAt: new Date(),
+                chatId: channel.chatId,
+                messageId
             });
         }
-
-        await HyperliquidDBService.insertAlert({
-            wallet: candidate.wallet,
-            coin: candidate.coin,
-            direction: candidate.direction,
-            totalNotional: candidate.totalNotional,
-            sentAt: new Date(),
-            messageId
-        });
     }
 
     private buildSocketGroups(names: string[]): string[][] {
@@ -930,14 +962,11 @@ export default class HyperliquidService extends Tracker {
         };
 
         try {
-            if (config.hyperliquid.mainCoins.includes(coin)) {
-                await this.tg.sendMessage(config.telegram.chatID, lines.join('\n'), {
-                    message_thread_id: config.telegram.trackTopicID,
-                    reply_markup: buttons
-                });
-            } else {
-                await this.tg.sendMessage(config.telegram.chatID, lines.join('\n'), {
-                    message_thread_id: config.telegram.trackTopicID,
+            for (let i = 0; i < this.trackChannels.length; i++) {
+                if (i > 0) await sleep(1000);
+                const channel = this.trackChannels[i];
+                await this.tg.sendMessage(channel.chatId, lines.join('\n'), {
+                    message_thread_id: channel.topicId,
                     reply_markup: buttons
                 });
             }

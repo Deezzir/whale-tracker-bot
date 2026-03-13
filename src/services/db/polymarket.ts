@@ -51,6 +51,7 @@ interface PolyAlert {
     outcomeIndex: number;
     positionUsd: number;
     sentAt: Date;
+    chatId: number;
     messageId?: number;
 }
 
@@ -63,12 +64,13 @@ const PolyAlertSchema = new Schema<PolyAlertDocument>(
         outcomeIndex: { type: Number, required: true },
         positionUsd: { type: Number, required: true },
         sentAt: { type: Date, required: true },
+        chatId: { type: Number, required: true },
         messageId: { type: Number }
     },
     { timestamps: true }
 );
 
-PolyAlertSchema.index({ proxyWallet: 1, conditionId: 1, outcomeIndex: 1 });
+PolyAlertSchema.index({ proxyWallet: 1, conditionId: 1, outcomeIndex: 1, chatId: 1 });
 
 const PolyAlertModel = mongoose.models.PolyAlert || mongoose.model<PolyAlertDocument>('PolyAlert', PolyAlertSchema);
 
@@ -207,17 +209,26 @@ export default class PolymarketDBService {
         }
     }
 
-    static async getLastAlert(
+    static async getLastAlerts(
         proxyWallet: string,
         conditionId: string,
-        outcomeIndex: number
-    ): Promise<PolyAlert | null> {
+        outcomeIndex: number,
+        chatIds: number[]
+    ): Promise<Map<number, PolyAlert>> {
+        if (chatIds.length === 0) return new Map();
         try {
-            return PolyAlertModel.findOne({ proxyWallet, conditionId, outcomeIndex }, null, { sort: { sentAt: -1 } })
-                .lean()
-                .exec() as Promise<PolyAlert | null>;
+            const docs = await PolyAlertModel.aggregate<{ _id: number; doc: PolyAlert }>([
+                { $match: { proxyWallet, conditionId, outcomeIndex, chatId: { $in: chatIds } } },
+                { $sort: { sentAt: -1 } },
+                { $group: { _id: '$chatId', doc: { $first: '$$ROOT' } } }
+            ]);
+            const result = new Map<number, PolyAlert>();
+            for (const { _id, doc } of docs) {
+                result.set(_id, doc);
+            }
+            return result;
         } catch (error) {
-            logger.error(`Error retrieving last alert for wallet ${proxyWallet}: ${error}`);
+            logger.error(`Error retrieving last alerts for wallet ${proxyWallet}: ${error}`);
             throw error;
         }
     }
