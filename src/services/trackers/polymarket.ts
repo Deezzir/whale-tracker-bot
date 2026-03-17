@@ -62,7 +62,7 @@ function classifyTradeTag(currentUsd: number, previousBuyAmounts: number[]): Tra
     return 'WEAK';
 }
 
-const ESPORTS_KEYWORDS = ['counter-strike', 'dota2', 'lol', 'valorant'];
+const ESPORTS_KEYWORDS = ['counter-strike', 'dota 2', 'lol', 'valorant'];
 const SPORT_KEYWORDS = ['BNP Paribas Open', 'win on 2026-03'];
 
 function isSportMarket(title: string): boolean {
@@ -82,9 +82,11 @@ function isEsportsMarket(title: string): boolean {
 
 export default class PolymarketService extends Tracker {
     private api = new PolymarketAPIService();
+    private static readonly CONNECT_TIMEOUT_MS = 15_000;
     private tradeBatch: PolyTrade[] = [];
     private batchInterval: NodeJS.Timeout | null = null;
     private pingInterval: NodeJS.Timeout | null = null;
+    private connectTimeout: NodeJS.Timeout | null = null;
     private affectedKeys = new Map<string, PositionKey>();
     private ws: WebSocket | null = null;
 
@@ -112,6 +114,7 @@ export default class PolymarketService extends Tracker {
 
         clearInterval(this.batchInterval!);
         this.affectedKeys.clear();
+        if (this.connectTimeout) clearTimeout(this.connectTimeout);
         if (this.ws) this.ws.close();
         if (this.batchInterval) clearInterval(this.batchInterval);
     }
@@ -141,12 +144,12 @@ export default class PolymarketService extends Tracker {
             }
         };
 
-        const alertNoDataLoop = this.watchDog(config.monitor.noDataTimeoutMs, async () => {
+        const watchDog = this.watchDog(config.monitor.noDataTimeoutMs, async () => {
             this.logger.warn('Forcing WebSocket reconnection due to no data received.');
             this.reconnectWebSocket();
         });
 
-        await Promise.all([scanLoop(), cleanupLoop(), alertNoDataLoop]);
+        await Promise.all([scanLoop(), cleanupLoop(), watchDog]);
     }
 
     private async backfill() {
@@ -299,6 +302,7 @@ export default class PolymarketService extends Tracker {
 
     private reconnectWebSocket() {
         if (this.pingInterval) clearInterval(this.pingInterval);
+        if (this.connectTimeout) clearTimeout(this.connectTimeout);
         const ws = this.ws;
         this.ws = null;
         if (ws) ws.close();
@@ -307,7 +311,20 @@ export default class PolymarketService extends Tracker {
 
     private async subscribeToLiveTrades() {
         const ws = new WebSocket(config.polymarket.wss);
+
+        this.connectTimeout = setTimeout(() => {
+            this.connectTimeout = null;
+            this.logger.warn(
+                `WebSocket did not open within ${PolymarketService.CONNECT_TIMEOUT_MS / 1000}s — forcing reconnect`
+            );
+            this.reconnectWebSocket();
+        }, PolymarketService.CONNECT_TIMEOUT_MS);
+
         ws.onopen = () => {
+            if (this.connectTimeout) {
+                clearTimeout(this.connectTimeout);
+                this.connectTimeout = null;
+            }
             this.logger.info('WebSocket connected, subscribing to orders_matched...');
             ws.send(
                 JSON.stringify({ action: 'subscribe', subscriptions: [{ topic: 'activity', type: 'orders_matched' }] })
@@ -323,6 +340,7 @@ export default class PolymarketService extends Tracker {
             try {
                 message = JSON.parse(rawData) as WsMessage;
             } catch {
+                this.logger.debug(JSON.stringify({ rawData }));
                 return;
             }
             if (message.topic === 'activity' && message.type === 'orders_matched' && message.payload) {

@@ -41,18 +41,21 @@ export abstract class Tracker {
     }
 
     protected async watchDog(timeoutMs: number, recover?: () => Promise<void>): Promise<void> {
-        const checkInterval = 5 * 60 * 1000;
+        const checkInterval = Math.min(Math.floor(timeoutMs / 3), 60_000);
 
         while (this.monitoring) {
             try {
                 const now = Date.now();
                 if (now - this.lastDataTimestamp >= timeoutMs) {
                     this.logger.warn('No data received within the specified timeout. Sending alert.');
+                    this.lastDataTimestamp = now;
                     await this.tg.sendMessage(
                         config.telegram.ownerUserID,
                         `⚠️ Alert: No data received for ${Math.floor(timeoutMs / 60000)} minutes from ${this.name}.`
                     );
-                    if (recover) void recover();
+                    if (recover) {
+                        recover().catch((err) => this.logger.error(`Error in watchDog recover: ${err}`));
+                    }
                 }
             } catch (err) {
                 this.logger.error(`Error in alertNoData: ${err}`);

@@ -27,8 +27,10 @@ export const config = {
     telegram: {
         botToken: requireEnv('BOT_TOKEN'),
         chatID: parseInt(requireEnv('CHAT_ID'), 10),
-        hsMainTopicID: parseInt(requireEnv('HS_MAIN_TOPIC_ID'), 10),
-        hsOtherTopicID: parseInt(requireEnv('HS_OTHER_TOPIC_ID'), 10),
+        hsMainPerpsTopicID: parseInt(requireEnv('HS_MAIN_PERPS_TOPIC_ID'), 10),
+        hsOtherPerpsTopicID: parseInt(requireEnv('HS_OTHER_PERPS_TOPIC_ID'), 10),
+        hsMainSpotTopicID: parseInt(requireEnv('HS_MAIN_SPOT_TOPIC_ID'), 10),
+        hsOtherSpotTopicID: parseInt(requireEnv('HS_OTHER_SPOT_TOPIC_ID'), 10),
         stakeTopicID: parseInt(requireEnv('STAKE_TOPIC_ID'), 10),
         trackTopicID: parseInt(requireEnv('TRACK_TOPIC_ID'), 10),
         polyTopicID: parseInt(requireEnv('POLY_TOPIC_ID'), 10),
@@ -42,6 +44,7 @@ export const config = {
     },
     hyperliquid: {
         minSuspiciousNotionalUSD: parseFloat(optionalEnv('HS_MIN_NOTIONAL_USD', '250000')),
+        minSpotNotionalUSD: parseFloat(optionalEnv('HS_MIN_SPOT_NOTIONAL_USD', '300000')),
         aggregationWindowMs: parseInt(optionalEnv('HS_AGGREGATION_WINDOW_MS', String(24 * 60 * 60 * 1000)), 10),
         minimalGrowthPercent: parseFloat(optionalEnv('HS_POS_CHANGE_ALERT_PERCENT', '20')),
         minimalGrowthUSD: parseFloat(optionalEnv('HS_POS_CHANGE_ALERT_USD', '50000')),

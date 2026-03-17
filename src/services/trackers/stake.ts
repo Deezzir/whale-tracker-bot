@@ -449,6 +449,7 @@ export default class StakeService extends Tracker {
                     password: this.proxy.password
                 });
             await this.page.goto(this.url, { waitUntil: 'networkidle2' });
+            await sleep(100000);
             await this.page.exposeFunction('onWSMessage', this.handleMessage.bind(this));
             await this.subscribeBets();
             this.logger.info('Page recreated and WebSockets resubscribed');

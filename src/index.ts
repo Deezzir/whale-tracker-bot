@@ -13,8 +13,10 @@ const logger = new Logger('Main');
 const telegram: Tg = new Tg();
 const hl = new HyperliquidService(
     telegram,
-    [{ chatId: config.telegram.chatID, topicId: config.telegram.hsMainTopicID }],
-    [{ chatId: config.telegram.chatID, topicId: config.telegram.hsOtherTopicID }],
+    [{ chatId: config.telegram.chatID, topicId: config.telegram.hsMainPerpsTopicID }],
+    [{ chatId: config.telegram.chatID, topicId: config.telegram.hsOtherPerpsTopicID }],
+    [{ chatId: config.telegram.chatID, topicId: config.telegram.hsMainSpotTopicID }],
+    [{ chatId: config.telegram.chatID, topicId: config.telegram.hsOtherSpotTopicID }],
     [{ chatId: config.telegram.chatID, topicId: config.telegram.trackTopicID }]
 );
 const stake = new StakeService(

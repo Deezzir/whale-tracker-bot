@@ -4,7 +4,7 @@ import Logger from '../../common/logger';
 const logger = new Logger('HyperliquidDB');
 
 // Hyperliquid wallet aggregation schema
-export type HyperTradeDirection = 'long' | 'short';
+export type HyperTradeDirection = 'long' | 'short' | 'spot';
 
 interface HyperAggregationDocument extends Document {
     wallet: string;
@@ -25,7 +25,7 @@ const HyperAggregationSchema = new Schema<HyperAggregationDocument>(
         wallet: { type: String, required: true },
         coin: { type: String, required: true },
         dateKey: { type: String, required: true },
-        direction: { type: String, required: true, enum: ['long', 'short'] },
+        direction: { type: String, required: true, enum: ['long', 'short', 'spot'] },
         totalNotional: { type: Number, default: 0 },
         tradeCount: { type: Number, default: 0 },
         lastTradeTime: { type: Number, default: 0 }
@@ -58,7 +58,7 @@ const HyperTrackedSchema = new Schema<HyperTrackedDocument>(
         wallet: { type: String, required: true, unique: true },
         coin: { type: String, required: true },
         totalNotional: { type: Number, default: 0 },
-        direction: { type: String, required: true, enum: ['long', 'short'] },
+        direction: { type: String, required: true, enum: ['long', 'short', 'spot'] },
         lastCheckedAt: { type: Number, default: 0 },
         nextCheckAt: { type: Number }
     },
@@ -86,7 +86,7 @@ const HyperAlertSchema = new Schema<HyperAlertDocument>(
     {
         wallet: { type: String, required: true },
         coin: { type: String, required: true },
-        direction: { type: String, required: true, enum: ['long', 'short'] },
+        direction: { type: String, required: true, enum: ['long', 'short', 'spot'] },
         totalNotional: { type: Number, required: true },
         sentAt: { type: Date, required: true },
         chatId: { type: Number, required: true },
