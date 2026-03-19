@@ -1,6 +1,5 @@
 import Tg from '../services/telegram';
 import { getRedisClient } from '../services/redis';
-import { config } from '../config';
 import Logger from './logger';
 import { sleep } from './utils';
 import { Mutex } from './mutex';
@@ -12,9 +11,10 @@ export interface ChatChannel {
 }
 
 export abstract class Tracker {
+    public name: string = this.constructor.name;
+
     protected screenshoter: ScreenshotService;
     protected useProxy: boolean;
-    protected name: string = this.constructor.name;
     protected logger = new Logger(this.name);
     protected tg: Tg;
     protected channels: ChatChannel[];
@@ -23,8 +23,10 @@ export abstract class Tracker {
     protected monitoring = false;
     protected flushMutex = new Mutex();
     protected monitorTask?: Promise<void>;
+
     protected lastDataTimestamp: number = Date.now();
     protected alertNoDataInterval: NodeJS.Timeout | null = null;
+    private restartCount = 0;
 
     constructor(tg: Tg, channels: ChatChannel[], useProxy = false, useProxyForScreenshots = false) {
         this.tg = tg;
@@ -40,8 +42,13 @@ export abstract class Tracker {
         return this.monitoring;
     }
 
+    isHealthy(threshold: number) {
+        return this.monitoring && this.restartCount < threshold;
+    }
+
     protected async watchDog(timeoutMs: number, recover?: () => Promise<void>): Promise<void> {
         const checkInterval = Math.min(Math.floor(timeoutMs / 3), 60_000);
+        let lastCheckedTimestamp = this.lastDataTimestamp;
 
         while (this.monitoring) {
             try {
@@ -49,13 +56,13 @@ export abstract class Tracker {
                 if (now - this.lastDataTimestamp >= timeoutMs) {
                     this.logger.warn('No data received within the specified timeout. Sending alert.');
                     this.lastDataTimestamp = now;
-                    await this.tg.sendMessage(
-                        config.telegram.ownerUserID,
-                        `⚠️ Alert: No data received for ${Math.floor(timeoutMs / 60000)} minutes from ${this.name}.`
-                    );
-                    if (recover) {
-                        recover().catch((err) => this.logger.error(`Error in watchDog recover: ${err}`));
-                    }
+                    lastCheckedTimestamp = now;
+                    this.restartCount++;
+                    await this.tg.sendNoDataAlert(this.name, timeoutMs, this.restartCount);
+                    if (recover) recover().catch((err) => this.logger.error(`Error in watchDog recover: ${err}`));
+                } else if (this.lastDataTimestamp !== lastCheckedTimestamp) {
+                    this.restartCount = 0;
+                    lastCheckedTimestamp = this.lastDataTimestamp;
                 }
             } catch (err) {
                 this.logger.error(`Error in alertNoData: ${err}`);

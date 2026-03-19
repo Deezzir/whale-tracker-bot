@@ -24,6 +24,7 @@ const ASSETS_PATH = './resources';
 export const config = {
     env: optionalEnv('NODE_ENV', 'development') as Environment,
     logFileEnabled: optionalEnv('LOG_FILE_ENABLED', 'false') === 'true',
+    healthServerPort: parseInt(optionalEnv('HEALTH_SERVER_PORT', '9988'), 10),
     telegram: {
         botToken: requireEnv('BOT_TOKEN'),
         chatID: parseInt(requireEnv('CHAT_ID'), 10),

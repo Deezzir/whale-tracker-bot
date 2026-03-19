@@ -8,6 +8,7 @@ import { config } from './config';
 import * as utils from './common/utils';
 import { HyperTradeDirection } from './services/db';
 import { Context } from 'telegraf';
+import HealthService from './healthz';
 
 const logger = new Logger('Main');
 const telegram: Tg = new Tg();
@@ -30,6 +31,7 @@ const poly = new PolymarketService(telegram, [
     { chatId: -1003468238602, topicId: 10961 }
 ]);
 const services: Tracker[] = [hl, stake, poly];
+const healthServer = new HealthService(config.healthServerPort, services);
 
 let keepAlive: NodeJS.Timeout;
 
@@ -165,6 +167,7 @@ async function shutdown(code: number): Promise<void> {
     logger.info('Shutting down...');
     try {
         if (keepAlive) clearInterval(keepAlive);
+        healthServer.stop();
         telegram.stop();
         await Promise.allSettled([closeDB(), closeRedis(), stopMonitoringServices()]);
     } catch (error) {
@@ -189,6 +192,10 @@ async function main(): Promise<void> {
 
     logger.info('Starting monitoring services.');
     startMonitoringServices();
+    healthServer.start(async (error?: string) => {
+        telegram.sendRestarUnhealthyAlert(error).catch((err) => logger.error(`Failed to send unhealthy alert: ${err}`));
+        shutdown(1);
+    });
 
     keepAlive = setInterval(() => {}, 60_000);
 

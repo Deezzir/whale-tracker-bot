@@ -107,6 +107,19 @@ export default class TelegramService {
         logger.info('Startup message sent and pinned');
     }
 
+    public async sendRestarUnhealthyAlert(error?: string): Promise<void> {
+        let message = `<b>🛑 Restarting bot, some services are unhealthy.</b>`;
+        if (error) message += `\n\n${error}`;
+        await this.sendMessage(config.telegram.ownerUserID, message);
+    }
+
+    public async sendNoDataAlert(trackerName: string, timeoutMs: number, attempt: number): Promise<void> {
+        this.sendMessage(
+            config.telegram.ownerUserID,
+            `⚠️ Alert: No data received for ${Math.floor(timeoutMs / 60000)} minutes from ${trackerName}. Attempt ${attempt}.`
+        ).catch((err) => logger.error(`Failed to send no data alert: ${err}`));
+    }
+
     public async sendMessage(chatID: number, message: string, extra?: SendMessageOptions): Promise<number> {
         try {
             const msg = await this.bot.telegram.sendMessage(chatID, message, {
@@ -129,7 +142,10 @@ export default class TelegramService {
         extra?: SendMessageOptions
     ): Promise<number> {
         try {
-            const inputFile: InputFile = { source: photo, filename: `photo_${Date.now()}.jpg` };
+            const inputFile: InputFile = {
+                source: photo,
+                filename: `photo_${Date.now()}.jpg`
+            };
             const msg = await this.bot.telegram.sendPhoto(chatID, inputFile, {
                 caption,
                 parse_mode: 'HTML',
@@ -194,7 +210,7 @@ export default class TelegramService {
         const botInfo = await this.bot.telegram.getMe();
         const member = await this.bot.telegram.getChatMember(config.telegram.chatID, botInfo.id);
         if (member.status !== 'administrator' && member.status !== 'creator') {
-            throw new Error(`The bot is not an administrator in group ${config.telegram.chatID}`);
+            throw new Error(`The bot is not an administrator in group ${config.telegram.chatID} `);
         }
         const chat = await this.bot.telegram.getChat(config.telegram.chatID);
         if (chat.type !== 'supergroup') {

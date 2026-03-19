@@ -177,34 +177,14 @@ export default class StakeService extends Tracker {
         this.monitoring = true;
         this.logger.info('StakeServivce monitoring started');
 
-        const args = [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-blink-features=AutomationControlled',
-            '--display=:0',
-            '--disable-dev-shm-usage'
-        ];
-        if (this.proxy) args.push(`--proxy-server=http://${this.proxy.host}:${this.proxy.port}`);
-
         try {
-            this.browser = await puppeteer.launch({
-                headless: config.puppeteer.headless,
-                userDataDir: config.puppeteer.userDir ? config.puppeteer.userDir : undefined,
-                args,
-                defaultViewport: { width: 1366, height: 768 }
-            });
-            this.page = await this.browser.newPage();
-            if (this.proxy)
-                await this.page.authenticate({
-                    username: this.proxy.username,
-                    password: this.proxy.password
-                });
-
-            await this.page.goto(this.url, { waitUntil: 'networkidle2' });
+            this.browser = await this.initBrowser();
+            this.page = await this.initPage(this.browser);
+            await sleep(5000);
+            this.setupPageEventHandlers(this.page);
             this.logger.info(
-                `Puppeteer launched with${this.proxy ? ` proxy ${this.proxy.host}:${this.proxy.port}` : 'out proxy'}`
+                `Puppeteer initialized with${this.proxy ? ` proxy ${this.proxy.host}:${this.proxy.port}` : 'out proxy'}`
             );
-            this.logger.info('Puppeteer initialized');
         } catch (error) {
             this.monitoring = false;
             this.page = null;
@@ -217,7 +197,6 @@ export default class StakeService extends Tracker {
             this.flushBetsBatch().catch((error) => this.logger.error(`Error flushing bets batch: ${error}`));
         }, config.stake.batchFlushIntervalMs);
 
-        await this.page.exposeFunction('onWSMessage', this.handleMessage.bind(this));
         await this.subscribeBets();
         this.monitorTask = this.mainLoop();
     }
@@ -228,11 +207,48 @@ export default class StakeService extends Tracker {
         await this.monitorTask?.catch((error) => this.logger.error(`Error while awaiting monitor task: ${error}`));
         this.monitorTask = undefined;
         this.logger.info('Monitoring stopped');
-        if (this.page) this.page.close();
-        if (this.browser) this.browser.close();
+        if (this.page) this.page.close().catch(() => {});
+        if (this.browser) this.browser.close().catch(() => {});
         if (this.betsBatchInterval) clearInterval(this.betsBatchInterval);
         this.page = null;
         this.browser = null;
+    }
+
+    private get browserArgs(): string[] {
+        const args = [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-blink-features=AutomationControlled',
+            '--display=:0',
+            '--disable-dev-shm-usage'
+        ];
+        if (this.proxy) args.push(`--proxy-server=http://${this.proxy.host}:${this.proxy.port}`);
+        return args;
+    }
+
+    private async initBrowser(): Promise<Browser> {
+        return await puppeteer.launch({
+            headless: config.puppeteer.headless,
+            userDataDir: config.puppeteer.userDir ? config.puppeteer.userDir : undefined,
+            args: this.browserArgs,
+            defaultViewport: { width: 1366, height: 768 }
+        });
+    }
+
+    private async initPage(browser: Browser): Promise<Page> {
+        const page = await browser.newPage();
+        if (this.proxy)
+            await page.authenticate({
+                username: this.proxy.username,
+                password: this.proxy.password
+            });
+
+        await page.goto(this.url, { waitUntil: 'networkidle2' });
+        return page;
+    }
+
+    private async setupPageEventHandlers(page: Page): Promise<void> {
+        await page.exposeFunction('onWSMessage', this.handleMessage.bind(this));
     }
 
     private async mainLoop(): Promise<void> {
@@ -434,25 +450,25 @@ export default class StakeService extends Tracker {
         if (!this.monitoring || this.reconnecting) return;
         if (!this.browser) throw new Error('Browser not initialized');
         this.reconnecting = true;
-        this.logger.info('Reconnecting: recreating page and resubscribing WebSockets...');
+        this.logger.info('Reinitializing Puppeteer due to WebSocket disconnect...');
 
         try {
             if (this.page) {
                 await this.page.close().catch(() => {});
                 this.page = null;
             }
-            await sleep(2000);
-            this.page = await this.browser.newPage();
-            if (this.proxy)
-                await this.page.authenticate({
-                    username: this.proxy.username,
-                    password: this.proxy.password
-                });
-            await this.page.goto(this.url, { waitUntil: 'networkidle2' });
-            await sleep(100000);
-            await this.page.exposeFunction('onWSMessage', this.handleMessage.bind(this));
+            if (this.browser) {
+                await this.browser.close().catch(() => {});
+                this.browser = null;
+            }
+
+            this.browser = await this.initBrowser();
+            this.page = await this.initPage(this.browser);
+            await sleep(5000);
+            this.setupPageEventHandlers(this.page);
+            this.logger.info('Puppeteer reinitialized successfully');
+
             await this.subscribeBets();
-            this.logger.info('Page recreated and WebSockets resubscribed');
         } catch (error) {
             this.logger.error(`Error recreating page: ${error}`);
         } finally {

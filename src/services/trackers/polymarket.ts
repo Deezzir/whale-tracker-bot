@@ -189,7 +189,7 @@ export default class PolymarketService extends Tracker {
 
     private async processAlertCandidate(candidate: PolyAggregationRecord): Promise<void> {
         const [marketInfo, walletInfo, walletStats] = await Promise.all([
-            this.api.getMarketIBySlug(candidate.slug),
+            this.api.getMarketBySlug(candidate.slug),
             this.api.getFirstTrade(candidate.wallet),
             this.api.getWalletStats(candidate.wallet)
         ]);

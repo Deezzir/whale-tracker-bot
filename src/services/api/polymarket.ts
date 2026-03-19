@@ -1,4 +1,4 @@
-import axios from 'axios';
+import axios, { isAxiosError } from 'axios';
 import { RateLimiter } from '../../common/rate-limiter';
 import { config } from '../../config';
 import { getRedisClient } from '../redis';
@@ -74,8 +74,9 @@ export default class PolymarketAPIService {
     private walletStatsCacheKey = (proxyWallet: string) => `gamma:wallet-stats:${proxyWallet}`;
     private redis = getRedisClient();
 
-    public async getMarketIBySlug(slug: string): Promise<Market | null> {
+    public async getMarketBySlug(slug: string): Promise<Market | null> {
         const cached = await this.redis.get(this.marketCacheKey(slug));
+        if (cached === 'null') return null;
         if (cached) return JSON.parse(cached) as Market;
 
         await this.gammaLimiter.acquire();
@@ -91,6 +92,11 @@ export default class PolymarketAPIService {
             );
             return result.data;
         } catch (err) {
+            if (isAxiosError(err) && err.response?.status === 404) {
+                logger.warn(`Market not found for slug: ${slug}`);
+                await this.redis.setEx(this.marketCacheKey(slug), config.monitor.cacheTTLMs / 1000, 'null');
+                return null;
+            }
             logger.error(`Failed to fetch market metadata for ${slug}`, err);
             return null;
         }
