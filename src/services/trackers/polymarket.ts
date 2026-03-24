@@ -340,7 +340,6 @@ export default class PolymarketService extends Tracker {
             try {
                 message = JSON.parse(rawData) as WsMessage;
             } catch {
-                this.logger.debug(JSON.stringify({ rawData }));
                 return;
             }
             if (message.topic === 'activity' && message.type === 'orders_matched' && message.payload) {

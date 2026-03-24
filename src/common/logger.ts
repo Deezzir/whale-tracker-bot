@@ -4,6 +4,14 @@ import { join } from 'path';
 
 type LogLevel = 'INFO' | 'WARN' | 'ERROR' | 'DEBUG';
 
+var LOG_LEVEL: LogLevel = 'INFO';
+if (config.logLevel) {
+    const level = config.logLevel.toUpperCase() as LogLevel;
+    if (['INFO', 'WARN', 'ERROR', 'DEBUG'].includes(level)) {
+        LOG_LEVEL = level;
+    }
+}
+
 export default class Logger {
     private module: string;
     private logsDir = join(process.cwd(), 'logs');
@@ -45,15 +53,23 @@ export default class Logger {
     }
 
     public info(message: string, data?: unknown) {
-        this.log('INFO', this.module, message, data);
+        if (['INFO', 'WARN', 'ERROR', 'DEBUG'].indexOf(LOG_LEVEL) > -1) {
+            this.log('INFO', this.module, message, data);
+        }
     }
     public warn(message: string, data?: unknown) {
-        this.log('WARN', this.module, message, data);
+        if (['WARN', 'ERROR', 'DEBUG'].indexOf(LOG_LEVEL) > -1) {
+            this.log('WARN', this.module, message, data);
+        }
     }
     public error(message: string, data?: unknown) {
-        this.log('ERROR', this.module, message, data);
+        if (['ERROR', 'DEBUG'].indexOf(LOG_LEVEL) > -1) {
+            this.log('ERROR', this.module, message, data);
+        }
     }
     public debug(message: string, data?: unknown) {
-        this.log('DEBUG', this.module, message, data);
+        if (['DEBUG'].indexOf(LOG_LEVEL) > -1) {
+            this.log('DEBUG', this.module, message, data);
+        }
     }
 }
