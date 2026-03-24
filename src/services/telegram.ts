@@ -3,6 +3,7 @@ import { config } from '../config';
 import Logger from '../common/logger';
 import { InlineKeyboardMarkup, InputFile } from 'telegraf/types';
 import { getRedisClient } from './redis';
+import { retry } from '../common/retrier';
 
 const logger = new Logger('Telegram');
 
@@ -85,7 +86,7 @@ export default class TelegramService {
             `┌─ <b>Polymarket configs</b>`,
             `  🎰 Regular threshold: <b>${fmt(config.polymarket.alertThresholdUsd)}</b>`,
             `  ⚽ Sport threshold: <b>${fmt(config.polymarket.sportAlertThresholdUsd)}</b>`,
-            `  📈 Re-alert: <b>+${fmt(config.polymarket.reAlertThresholdPercent)}%</b> of last position`,
+            `  📈 Re-alert: <b>+${fmt(config.polymarket.minimalGrowthPercent)}%</b> of last position`,
             `  ⏳ Data retention: <b>${config.polymarket.cleanupTTLms / (24 * 60 * 60 * 1000)} days</b>`,
             `└─`,
             ``,
@@ -95,7 +96,7 @@ export default class TelegramService {
             `└─`,
             ``,
             `┌─ <b>Hyperliquid configs</b>`,
-            `  🎰 Minimum notional: <b>${fmt(config.hyperliquid.minSuspiciousNotionalUSD)}</b>`,
+            `  🎰 Minimum notional: <b>${fmt(config.hyperliquid.minNotionalUSD)}</b>`,
             `  📈 Re-alert: <b>+${fmt(config.hyperliquid.minimalGrowthPercent)}%</b> of the position increase`,
             `  ⏳ Data retention: <b>${config.hyperliquid.cleanupTTLms / (24 * 60 * 60 * 1000)} days</b>`,
             `└─`
@@ -120,19 +121,28 @@ export default class TelegramService {
         ).catch((err) => logger.error(`Failed to send no data alert: ${err}`));
     }
 
+    public async sendNoScanAlert(trackerName: string, timeoutMs: number, attempt: number): Promise<void> {
+        await this.sendMessage(
+            config.telegram.ownerUserID,
+            `⚠️ Alert: No scan completed for ${Math.floor(timeoutMs / 60000)} minutes from ${trackerName}. Attempt ${attempt}.`
+        ).catch((err) => logger.error(`Failed to send no scan alert: ${err}`));
+    }
+
     public async sendMessage(chatID: number, message: string, extra?: SendMessageOptions): Promise<number> {
-        try {
-            const msg = await this.bot.telegram.sendMessage(chatID, message, {
-                parse_mode: 'HTML',
-                link_preview_options: { is_disabled: true },
-                reply_markup: extra?.reply_markup,
-                message_thread_id: extra?.message_thread_id
-            });
-            return msg.message_id;
-        } catch (err) {
-            logger.error('Failed to send Telegram message', err);
-            throw err;
-        }
+        const MAX_RETRIES = 3;
+        return retry(
+            async () => {
+                const msg = await this.bot.telegram.sendMessage(chatID, message, {
+                    parse_mode: 'HTML',
+                    link_preview_options: { is_disabled: true },
+                    reply_markup: extra?.reply_markup,
+                    message_thread_id: extra?.message_thread_id
+                });
+                return msg.message_id;
+            },
+            { attempts: MAX_RETRIES },
+            logger
+        );
     }
 
     public async sendPhoto(
@@ -141,22 +151,24 @@ export default class TelegramService {
         caption: string,
         extra?: SendMessageOptions
     ): Promise<number> {
-        try {
-            const inputFile: InputFile = {
-                source: photo,
-                filename: `photo_${Date.now()}.jpg`
-            };
-            const msg = await this.bot.telegram.sendPhoto(chatID, inputFile, {
-                caption,
-                parse_mode: 'HTML',
-                reply_markup: extra?.reply_markup,
-                message_thread_id: extra?.message_thread_id
-            });
-            return msg.message_id;
-        } catch (err) {
-            logger.error('Failed to send Telegram photo', err);
-            throw err;
-        }
+        const MAX_RETRIES = 3;
+        return retry(
+            async () => {
+                const inputFile: InputFile = {
+                    source: photo,
+                    filename: `photo_${Date.now()}.jpg`
+                };
+                const msg = await this.bot.telegram.sendPhoto(chatID, inputFile, {
+                    caption,
+                    parse_mode: 'HTML',
+                    reply_markup: extra?.reply_markup,
+                    message_thread_id: extra?.message_thread_id
+                });
+                return msg.message_id;
+            },
+            { attempts: MAX_RETRIES },
+            logger
+        );
     }
 
     public async sendReply(
@@ -165,18 +177,20 @@ export default class TelegramService {
         replyToMessageId: number,
         extras?: SendMessageOptions
     ): Promise<void> {
-        try {
-            await this.bot.telegram.sendMessage(chatID, text, {
-                parse_mode: 'HTML',
-                link_preview_options: { is_disabled: true },
-                reply_parameters: { message_id: replyToMessageId },
-                message_thread_id: extras?.message_thread_id,
-                reply_markup: extras?.reply_markup
-            });
-        } catch (err) {
-            logger.error('Failed to send reply alert', err);
-            throw err;
-        }
+        const MAX_RETRIES = 3;
+        await retry(
+            async () => {
+                await this.bot.telegram.sendMessage(chatID, text, {
+                    parse_mode: 'HTML',
+                    link_preview_options: { is_disabled: true },
+                    reply_parameters: { message_id: replyToMessageId },
+                    message_thread_id: extras?.message_thread_id,
+                    reply_markup: extras?.reply_markup
+                });
+            },
+            { attempts: MAX_RETRIES },
+            logger
+        );
     }
 
     public async checkMessageSource(ctx: Context, requireOwner: boolean): Promise<boolean> {

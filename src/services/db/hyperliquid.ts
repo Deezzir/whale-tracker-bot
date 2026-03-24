@@ -210,7 +210,9 @@ export default class HyperliquidDBService {
                 };
             });
 
+            const start = performance.now();
             const result = await HyperAggregationModel.bulkWrite(bulkOps, { ordered: false });
+            logger.debug(`addTradesBulk: ${bulkOps.length} ops in ${(performance.now() - start).toFixed(1)}ms`);
             return result.ok === 1;
         } catch (error) {
             logger.error(`Error inserting trade batch: ${error}`);
@@ -261,9 +263,13 @@ export default class HyperliquidDBService {
 
     static async getExpiredTrackedWallets(): Promise<HyperTrackedRecord[]> {
         try {
+            const start = performance.now();
             const docs = await HyperTrackedModel.find({ nextCheckAt: { $lte: Date.now() } })
                 .lean()
                 .exec();
+            logger.debug(
+                `getExpiredTrackedWallets: ${docs.length} results in ${(performance.now() - start).toFixed(1)}ms`
+            );
             return docs.map((doc) => ({
                 id: String(doc._id),
                 wallet: doc.wallet,
@@ -323,6 +329,7 @@ export default class HyperliquidDBService {
             const dateKey = this.formatDateKey(Date.now(), windowMs);
             if (keysToScan.length === 0) return [];
 
+            const start = performance.now();
             const docs = await HyperAggregationModel.find(
                 {
                     dateKey,
@@ -341,6 +348,9 @@ export default class HyperliquidDBService {
             )
                 .lean()
                 .exec();
+            logger.debug(
+                `getTradesToAlert: ${keysToScan.length} keys, ${docs.length} results in ${(performance.now() - start).toFixed(1)}ms`
+            );
 
             return docs.map((doc) => ({
                 id: String(doc._id),
@@ -358,11 +368,43 @@ export default class HyperliquidDBService {
         }
     }
 
+    static async updateTradeNotional(id: string, newNotional: number): Promise<void> {
+        try {
+            await HyperAggregationModel.updateOne(
+                { _id: new mongoose.Types.ObjectId(id) },
+                { $set: { totalNotional: newNotional } }
+            ).exec();
+        } catch (error) {
+            logger.error(`Error updating notional for trade ${id}: ${error}`);
+            throw error;
+        }
+    }
+
     static async cleanTrades(ttlMs: number): Promise<void> {
         try {
             const cutoffDate = new Date(Date.now() - ttlMs).toISOString();
             const result = await HyperAggregationModel.deleteMany({ updatedAt: { $lt: cutoffDate } });
             logger.info(`Deleted ${result.deletedCount} old records`);
+        } catch (error) {
+            logger.error(`${error}`);
+            throw error;
+        }
+    }
+
+    static async deleteTrade(id: string): Promise<void> {
+        try {
+            await HyperAggregationModel.deleteOne({ _id: new mongoose.Types.ObjectId(id) }).exec();
+        } catch (error) {
+            logger.error(`Error deleting trade ${id}: ${error}`);
+            throw error;
+        }
+    }
+
+    static async cleanAlerts(ttlMs: number): Promise<void> {
+        try {
+            const cutoffDate = new Date(Date.now() - ttlMs).toISOString();
+            const result = await HyperAlertModel.deleteMany({ sentAt: { $lt: cutoffDate } });
+            logger.info(`Deleted ${result.deletedCount} old alert records`);
         } catch (error) {
             logger.error(`${error}`);
             throw error;
@@ -377,11 +419,15 @@ export default class HyperliquidDBService {
     ): Promise<Map<number, HyperAlert>> {
         if (chatIds.length === 0) return new Map();
         try {
+            const start = performance.now();
             const docs = await HyperAlertModel.aggregate<{ _id: number; doc: HyperAlert }>([
                 { $match: { wallet, coin, direction, chatId: { $in: chatIds } } },
                 { $sort: { sentAt: -1 } },
                 { $group: { _id: '$chatId', doc: { $first: '$$ROOT' } } }
             ]);
+            logger.debug(
+                `getLastAlerts: wallet=${wallet}, ${docs.length} results in ${(performance.now() - start).toFixed(1)}ms`
+            );
             const result = new Map<number, HyperAlert>();
             for (const { _id, doc } of docs) {
                 result.set(_id, doc);

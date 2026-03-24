@@ -6,7 +6,12 @@ const logger = new Logger('Redis');
 
 const redis = createClient({
     url: config.db.redisURL,
-    password: config.db.redisPassword || undefined
+    password: config.db.redisPassword || undefined,
+    commandsQueueMaxLength: 128,
+    socket: {
+        connectTimeout: 5000,
+        reconnectStrategy: (retries) => Math.min(retries * 500, 5000)
+    }
 });
 
 export function getRedisClient() {
@@ -20,7 +25,7 @@ export async function connectRedis() {
             process.exit(1);
         });
         await redis.connect();
-        logger.info('Connected to Redis');
+        // logger.info('Connected to Redis');
     } catch (error) {
         logger.error(`Redis connection error: ${error}`);
         process.exit(1);

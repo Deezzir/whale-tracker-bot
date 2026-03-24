@@ -2,7 +2,7 @@ import { config } from '../../config';
 import { Markup } from 'telegraf';
 import { InlineKeyboardMarkup } from 'telegraf/types';
 import { ChatChannel, Tracker } from '../../common/tracker';
-import { escapeHtml, formatCurrency, sleep } from '../../common/utils';
+import { escapeHtml, formatCurrency, sleep, withTimeout } from '../../common/utils';
 import Tg from '../telegram';
 import HyperliquidDBService, {
     HyperAggregationRecord,
@@ -11,11 +11,18 @@ import HyperliquidDBService, {
     HyperTradeRecord,
     PositionKey
 } from '../db/hyperliquid';
-import HyperliquidAPI, { AssetPosition, PortfolioResponse, SpotWsPair, TraderState } from '../api/hyperliquid';
+import HyperliquidAPI, { AssetPosition, PortfolioResponse as TraderPortfolio, TraderState } from '../api/hyperliquid';
 
-type AccountTag = 'FRESH' | 'DORMANT' | 'SMALL' | 'MEDIUM' | 'LARGE';
+type AccountTag = {
+    tag: 'FRESH' | 'DORMANT' | 'SMALL' | 'MEDIUM' | 'LARGE';
+    totalValue: number;
+    perpsValue: number;
+    spotValue: number;
+    perpsCount: number;
+    spotCount: number;
+};
 
-function getPortfolioTimestamps(portfolio: PortfolioResponse): { first: number | null; last: number | null } {
+function getPortfolioTimestamps(portfolio: TraderPortfolio): { first: number | null; last: number | null } {
     const buckets = portfolio.filter(([label]) => label === 'perpAllTime' || label === 'allTime');
     for (const [, stats] of buckets) {
         const history = stats?.accountValueHistory ?? [];
@@ -26,22 +33,31 @@ function getPortfolioTimestamps(portfolio: PortfolioResponse): { first: number |
     return { first: null, last: null };
 }
 
-function classifyAccountTag(account: TraderState, portfolio: PortfolioResponse): AccountTag {
-    if (!account.perp || !account.spot) return 'FRESH';
+function classifyAccountTag(account: TraderState, portfolio: TraderPortfolio): AccountTag {
+    if (!account.perp || !account.spot)
+        return { tag: 'FRESH', totalValue: 0, perpsValue: 0, spotValue: 0, perpsCount: 0, spotCount: 0 };
     const now = Date.now();
     const { first: firstTimestamp, last: lastTimestamp } = getPortfolioTimestamps(portfolio);
 
-    const perpValue = parseFloat(account.perp.marginSummary?.accountValue || '0');
-    const spotValue = account.spot.balances.reduce((sum, b) => sum + parseFloat(b.entryNtl) * parseFloat(b.total), 0);
-    const totalValue = perpValue + spotValue;
+    const perpsValue = parseFloat(account.perp.marginSummary?.accountValue || '0');
+    const perpsCount = account.perp.assetPositions ? account.perp.assetPositions.length : 0;
 
-    if (firstTimestamp !== null && now - firstTimestamp < 7 * 24 * 60 * 60 * 1000) return 'FRESH';
-    if (lastTimestamp !== null && now - lastTimestamp > 10 * 24 * 60 * 60 * 1000) return 'DORMANT';
+    const spotValue = account.spot.balances.reduce((sum, b) => sum + parseFloat(b.px) * parseFloat(b.total), 0);
+    const spotCount = account.spot.balances ? account.spot.balances.filter((s) => parseFloat(s.hold) !== 0).length : 0;
 
-    if (totalValue < 500_000) return 'SMALL';
-    if (totalValue <= 1_000_000) return 'MEDIUM';
+    const totalValue = perpsValue + spotValue;
 
-    return 'LARGE';
+    if (firstTimestamp !== null && now - firstTimestamp < 7 * 24 * 60 * 60 * 1000)
+        return { tag: 'FRESH', totalValue: totalValue, perpsValue, spotValue, perpsCount, spotCount };
+    if (lastTimestamp !== null && now - lastTimestamp > 10 * 24 * 60 * 60 * 1000)
+        return { tag: 'DORMANT', totalValue: totalValue, perpsValue, spotValue, perpsCount, spotCount };
+
+    if (totalValue < 500_000)
+        return { tag: 'SMALL', totalValue: totalValue, perpsValue, spotValue, perpsCount, spotCount };
+    if (totalValue <= 1_000_000)
+        return { tag: 'MEDIUM', totalValue: totalValue, perpsValue, spotValue, perpsCount, spotCount };
+
+    return { tag: 'LARGE', totalValue: totalValue, perpsValue, spotValue, perpsCount, spotCount };
 }
 
 interface WsTrade {
@@ -60,14 +76,9 @@ function isSpot(direction: HyperTradeDirection): boolean {
 }
 
 interface AlertContext {
-    id: string;
-    aggregateTotalNotional?: number;
-    aggregateTradeCount?: number;
-    aggregationWindowMs?: number;
-    positionState: AssetPosition;
-    lastTradeTime: number;
+    candidate: HyperAggregationRecord;
     state: TraderState;
-    accountTag: AccountTag;
+    portfolio: TraderPortfolio;
 }
 
 export default class HyperliquidService extends Tracker {
@@ -112,15 +123,18 @@ export default class HyperliquidService extends Tracker {
         this.monitoring = true;
         this.logger.info('Monitoring started');
 
-        const names = await this.api.fetchCoins();
-        if (names.length === 0) throw new Error('Failed to fetch coin list from Hyperliquid API');
+        const perpNames = await this.api.fetchCoins();
+        if (perpNames.length === 0) throw new Error('Failed to fetch coin list from Hyperliquid API');
 
         const spotPairs = await this.api.fetchSpotCoins();
         if (spotPairs.length === 0) throw new Error('Failed to fetch spot coin list from Hyperliquid API');
         this.spotCoinMap = new Map(spotPairs.map((p) => [p.wsName, p.displayName]));
         this.logger.info(`Loaded ${spotPairs.length} spot pairs for monitoring`);
 
-        this.sockets = this.buildSocketGroups(names, spotPairs).map((group) => ({
+        this.sockets = this.buildSocketGroups(
+            perpNames,
+            spotPairs.map((p) => p.wsName)
+        ).map((group) => ({
             ws: null,
             coins: group,
             pingInterval: null,
@@ -312,6 +326,7 @@ export default class HyperliquidService extends Tracker {
             while (this.monitoring) {
                 try {
                     await HyperliquidDBService.cleanTrades(config.hyperliquid.cleanupTTLms);
+                    await HyperliquidDBService.cleanAlerts(config.hyperliquid.cleanupTTLms);
                 } catch (error) {
                     this.logger.error(`Failed to cleanup: ${error}`);
                 }
@@ -337,12 +352,17 @@ export default class HyperliquidService extends Tracker {
             for (const slot of this.sockets) this.reconnectWebSocket(slot);
         });
 
-        await Promise.all([scanLoop(), cleanupLoop(), trackLoop(), alertNoDataLoop]);
+        const scanWatchDog = this.scanWatchDog(config.monitor.scanStallTimeoutMs);
+
+        await Promise.all([scanLoop(), cleanupLoop(), trackLoop(), alertNoDataLoop, scanWatchDog]);
     }
 
     private async scanAndAlert(): Promise<void> {
+        const CANDIDATE_TIMEOUT_MS = 20_000;
+
         if (this.affectedKeys.size === 0) {
             this.logger.info('No affected positions to scan');
+            this.lastScanTimestamp = Date.now();
             return;
         }
 
@@ -356,7 +376,7 @@ export default class HyperliquidService extends Tracker {
             perpKeys.length > 0
                 ? await HyperliquidDBService.getTradesToAlert(
                       perpKeys,
-                      config.hyperliquid.minSuspiciousNotionalUSD,
+                      config.hyperliquid.minNotionalUSD,
                       config.hyperliquid.aggregationWindowMs
                   )
                 : [];
@@ -375,12 +395,31 @@ export default class HyperliquidService extends Tracker {
         this.logger.info(
             `Found ${candidates.length} candidates needing alert (${perpCandidates.length} perp, ${spotCandidates.length} spot)`
         );
+        if (candidates.length === 0) return;
+
+        const uniqueWallets = [...new Set(candidates.map((c) => c.wallet))];
+        const walletData = await this.prefetchWalletData(uniqueWallets);
+
         for (const candidate of candidates) {
             try {
+                const data = walletData.get(candidate.wallet);
+                if (!data) {
+                    this.logger.debug(`No prefetched data for wallet ${candidate.wallet}, skipping`);
+                    continue;
+                }
+                const label = `processAlertCandidate(${candidate.wallet}/${candidate.coin})`;
                 if (isSpot(candidate.direction)) {
-                    await this.processSpotAlertCandidate(candidate);
+                    await withTimeout(
+                        this.processSpotAlertCandidate(candidate, data.portfolio, data.state),
+                        CANDIDATE_TIMEOUT_MS,
+                        label
+                    );
                 } else {
-                    await this.processAlertCandidate(candidate);
+                    await withTimeout(
+                        this.processAlertCandidate(candidate, data.portfolio, data.state),
+                        CANDIDATE_TIMEOUT_MS,
+                        label
+                    );
                 }
             } catch (error) {
                 this.logger.error(
@@ -388,6 +427,7 @@ export default class HyperliquidService extends Tracker {
                 );
             }
         }
+        this.lastScanTimestamp = Date.now();
     }
 
     private async trackAndAlert(): Promise<void> {
@@ -468,39 +508,20 @@ export default class HyperliquidService extends Tracker {
         }
     }
 
-    private buildSocketGroups(perpNames: string[], spotPairs: SpotWsPair[] = []): string[][] {
+    private buildSocketGroups(perpNames: string[], spotNames: string[]): string[][] {
         const MAX_SOCKETS = 10;
 
         const groups: string[][] = [];
-        const PerpsBtc = perpNames.filter((c) => c.includes('BTC'));
-        const PerpsEth = perpNames.filter((c) => c.includes('ETH'));
-        const PerpsSol = perpNames.filter((c) => c.includes('SOL'));
-        const perpsRest = perpNames.filter((c) => !c.includes('BTC') && !c.includes('ETH') && !c.includes('SOL'));
-
-        const spotBtc = spotPairs.filter((p) => p.displayName.includes('BTC')).map((p) => p.wsName);
-        const spotEth = spotPairs.filter((p) => p.displayName.includes('ETH')).map((p) => p.wsName);
-        const spotSol = spotPairs.filter((p) => p.displayName.includes('SOL')).map((p) => p.wsName);
-        const spotPairsRest = spotPairs
-            .filter(
-                (p) =>
-                    !p.displayName.includes('BTC') && !p.displayName.includes('ETH') && !p.displayName.includes('SOL')
-            )
-            .map((p) => p.wsName);
-
-        groups.push([...PerpsBtc, ...spotBtc]);
-        groups.push([...PerpsEth, ...spotEth]);
-        groups.push([...PerpsSol, ...spotSol]);
-
         const numRestSockets = MAX_SOCKETS - groups.length;
+        const all = perpNames.concat(spotNames);
 
-        const perpsChunkSize = Math.ceil(perpsRest.length / numRestSockets);
-        for (let i = 0; i < perpsRest.length; i += perpsChunkSize) {
-            groups.push(perpsRest.slice(i, i + perpsChunkSize));
+        const restChunkSize = Math.ceil(all.length / numRestSockets);
+        for (let i = 0; i < all.length; i += restChunkSize) {
+            groups.push(all.slice(i, i + restChunkSize));
         }
-        const spotChunkSize = Math.ceil(spotPairsRest.length / numRestSockets);
-        for (let i = 0; i < spotPairsRest.length; i += spotChunkSize) {
-            groups.push(spotPairsRest.slice(i, i + spotChunkSize));
-        }
+
+        if (groups.length > MAX_SOCKETS)
+            throw new Error(`Too many socket groups: ${groups.length}, expected max ${MAX_SOCKETS}`);
         return groups;
     }
 
@@ -590,8 +611,8 @@ export default class HyperliquidService extends Tracker {
 
     async getCoinStats(coin: string): Promise<string> {
         try {
-            const perpsStats = await this.api.getPerpStats();
-            const spotStats = await this.api.getSpotStats();
+            const perpsStats = await this.api.fetchPerpMeta();
+            const spotStats = await this.api.fetchSpotMeta();
 
             if (!perpsStats || !spotStats) {
                 return 'Failed to fetch market statistics. Please try again later.';
@@ -700,8 +721,10 @@ export default class HyperliquidService extends Tracker {
     }
 
     async handleTrade(trade: WsTrade, coin: string): Promise<void> {
+        const MIN_TRADE_NOTIONAL_USD = 1000;
+
         const notional = parseFloat(trade.px) * parseFloat(trade.sz);
-        if (!Number.isFinite(notional)) return;
+        if (!Number.isFinite(notional) || notional < MIN_TRADE_NOTIONAL_USD) return;
 
         if (this.spotCoinMap.has(coin)) {
             const displayCoin = this.spotCoinMap.get(coin) ?? coin;
@@ -726,10 +749,15 @@ export default class HyperliquidService extends Tracker {
                 });
             }
         } else {
-            const buyer = trade.users[0];
-            if (!buyer) return;
-            const direction: HyperTradeDirection = trade.side === 'B' ? 'long' : 'short';
-            this.tradeBatch.push({ wallet: buyer, coin, notional, tradeTime: trade.time, direction });
+            if (trade.side === 'B') {
+                const taker = trade.users[0]; // buyer/taker
+                if (!taker) return;
+                this.tradeBatch.push({ wallet: taker, coin, notional, tradeTime: trade.time, direction: 'long' });
+            } else {
+                const taker = trade.users[1]; // seller/taker
+                if (!taker) return;
+                this.tradeBatch.push({ wallet: taker, coin, notional, tradeTime: trade.time, direction: 'short' });
+            }
         }
 
         if (this.tradeBatch.length >= config.hyperliquid.batchSize) await this.flushTradeBatch();
@@ -848,35 +876,124 @@ export default class HyperliquidService extends Tracker {
         }
     }
 
-    private async processAlertCandidate(candidate: HyperAggregationRecord): Promise<void> {
-        this.logger.debug(
-            `Detected high-value trade: ${candidate.wallet} ${candidate.coin} ${formatCurrency(candidate.totalNotional)} (${candidate.direction})`
-        );
-        const portfolio = await this.api.fetchPortfolio(candidate.wallet);
-        if (!portfolio) return;
-        const state = await this.api.fetchTraderState(candidate.wallet);
-        if (!state.perp || !state.spot) return;
+    private async prefetchWalletData(
+        wallets: string[],
+        concurrency = 5
+    ): Promise<Map<string, { portfolio: TraderPortfolio; state: TraderState }>> {
+        const WALLET_FETCH_TIMEOUT = 20_000;
+        const result = new Map<string, { portfolio: TraderPortfolio; state: TraderState }>();
+        const totalBatches = Math.ceil(wallets.length / concurrency);
 
-        const positionState = state.perp.assetPositions?.find((pos) => pos.position?.coin === candidate.coin);
+        this.logger.info(
+            `Prefetching data for ${wallets.length} unique wallets (${totalBatches} batches, concurrency=${concurrency})`
+        );
+
+        for (let i = 0; i < wallets.length; i += concurrency) {
+            const batchIndex = Math.floor(i / concurrency) + 1;
+            const batch = wallets.slice(i, i + concurrency);
+            const batchStart = Date.now();
+
+            this.logger.debug(`Prefetch batch ${batchIndex}/${totalBatches}: fetching ${batch.length} wallets`);
+
+            const settled = await Promise.allSettled(
+                batch.map(async (wallet) => {
+                    const fetchData = async () => {
+                        const [portfolio, state] = await Promise.all([
+                            this.api.fetchPortfolio(wallet),
+                            this.api.fetchTraderState(wallet)
+                        ]);
+                        return { wallet, portfolio, state };
+                    };
+                    return new Promise<{ wallet: string; portfolio: TraderPortfolio | null; state: TraderState }>(
+                        (resolve, reject) => {
+                            const timer = setTimeout(
+                                () =>
+                                    reject(
+                                        new Error(`Timeout fetching wallet ${wallet} after ${WALLET_FETCH_TIMEOUT}ms`)
+                                    ),
+                                WALLET_FETCH_TIMEOUT
+                            );
+                            fetchData().then(
+                                (val) => {
+                                    clearTimeout(timer);
+                                    resolve(val);
+                                },
+                                (err) => {
+                                    clearTimeout(timer);
+                                    reject(err);
+                                }
+                            );
+                        }
+                    );
+                })
+            );
+
+            let batchSuccess = 0;
+            let batchSkipped = 0;
+            for (const res of settled) {
+                if (res.status === 'fulfilled') {
+                    const { wallet, portfolio, state } = res.value;
+                    if (portfolio && state.perp && state.spot) {
+                        result.set(wallet, { portfolio, state });
+                        batchSuccess++;
+                    } else {
+                        batchSkipped++;
+                        this.logger.debug(
+                            `Skipping wallet ${wallet}: portfolio=${!!portfolio}, perp=${!!state.perp}, spot=${!!state.spot}`
+                        );
+                    }
+                } else {
+                    batchSkipped++;
+                    this.logger.error(`Failed to prefetch wallet data: ${res.reason}`);
+                }
+            }
+
+            this.logger.debug(
+                `Prefetch batch ${batchIndex}/${totalBatches} done in ${Date.now() - batchStart}ms: ${batchSuccess} ok, ${batchSkipped} skipped`
+            );
+        }
+
+        this.logger.info(`Prefetch complete: ${result.size}/${wallets.length} wallets ready`);
+        return result;
+    }
+
+    private async processAlertCandidate(
+        candidate: HyperAggregationRecord,
+        portfolio: TraderPortfolio,
+        state: TraderState
+    ): Promise<void> {
+        this.logger.debug(
+            `Detected high-value perps trade: ${candidate.wallet} ${candidate.coin} ${formatCurrency(candidate.totalNotional)} (${candidate.direction})`
+        );
+
+        const alertChannels = this.getAlertChannels(candidate.coin, candidate.direction);
+        const positionState = state.perp!.assetPositions?.find((pos) => pos.position?.coin === candidate.coin);
         if (!positionState || !positionState.position) {
             this.logger.debug(
-                `Skipping alert for high-value trade (no position found): ${candidate.wallet} ${candidate.coin} ${formatCurrency(candidate.totalNotional)} (${candidate.direction})`
+                `Skipping alert for high-value perps trade (no position found): ${candidate.wallet} ${candidate.coin} ${formatCurrency(candidate.totalNotional)} (${candidate.direction})`
             );
+            await HyperliquidDBService.deleteTrade(candidate.id);
             return;
         }
         const direction: HyperTradeDirection = parseFloat(positionState.position.szi) > 0 ? 'long' : 'short';
         if (direction !== candidate.direction) {
             this.logger.debug(
-                `Skipping alert for high-value trade (direction mismatch): ${candidate.wallet} ${candidate.coin} ${formatCurrency(candidate.totalNotional)} (${candidate.direction})`
+                `Skipping alert for high-value perps trade (direction mismatch): ${candidate.wallet} ${candidate.coin} ${formatCurrency(candidate.totalNotional)} (${candidate.direction})`
+            );
+            await HyperliquidDBService.deleteTrade(candidate.id);
+            return;
+        }
+        const upstreamTotalNotional = Math.abs(
+            parseFloat(positionState.position.szi) * parseFloat(positionState.position.entryPx || '0')
+        );
+        if (upstreamTotalNotional < config.hyperliquid.minNotionalUSD) {
+            this.logger.debug(
+                `Skipping alert for high-value perps trade (upstream notional too low): ${candidate.wallet} ${candidate.coin} ${formatCurrency(upstreamTotalNotional)} (${candidate.direction})`
             );
             return;
         }
-
-        const alertChannels = config.hyperliquid.mainCoins.some((c) =>
-            candidate.coin.toLowerCase().includes(c.toLowerCase())
-        )
-            ? this.mainPerpChannels
-            : this.otherPerpChannels;
+        candidate.totalNotional = upstreamTotalNotional;
+        await HyperliquidDBService.updateTradeNotional(candidate.id, candidate.totalNotional);
 
         const lastAlerts = await HyperliquidDBService.getLastAlerts(
             candidate.wallet,
@@ -934,20 +1051,12 @@ export default class HyperliquidService extends Tracker {
         this.logger.info(
             `Sending alert for high-value trade: ${candidate.wallet} ${candidate.coin} ${formatCurrency(candidate.totalNotional)} (${candidate.direction})`
         );
-        const accountTag = classifyAccountTag(state, portfolio);
 
-        const alertContext: AlertContext = {
-            id: candidate.id,
-            aggregateTotalNotional: candidate.totalNotional,
-            aggregateTradeCount: candidate.tradeCount,
-            aggregationWindowMs: config.hyperliquid.aggregationWindowMs,
-            positionState: positionState,
-            lastTradeTime: candidate.lastTradeTime,
+        const result = this.formatAlertMessage({
+            candidate,
             state,
-            accountTag
-        };
-
-        const result = this.formatAlertMessage(candidate.coin, candidate.wallet, alertContext);
+            portfolio
+        });
         if (!result) return;
         const { msg, buttons } = result;
 
@@ -998,21 +1107,34 @@ export default class HyperliquidService extends Tracker {
         }
     }
 
-    private async processSpotAlertCandidate(candidate: HyperAggregationRecord): Promise<void> {
+    private async processSpotAlertCandidate(
+        candidate: HyperAggregationRecord,
+        portfolio: TraderPortfolio,
+        state: TraderState
+    ): Promise<void> {
         this.logger.debug(
             `Detected high-value spot trade: ${candidate.wallet} ${candidate.coin} ${formatCurrency(candidate.totalNotional)} (${candidate.direction})`
         );
 
-        const portfolio = await this.api.fetchPortfolio(candidate.wallet);
-        if (!portfolio) return;
-        const state = await this.api.fetchTraderState(candidate.wallet);
-        if (!state.perp || !state.spot) return;
+        const alertChannels = this.getAlertChannels(candidate.coin, candidate.direction);
+        const positionState = state.spot!.balances.find((pos) => pos.coin === candidate.coin.split('/')[0]);
+        if (!positionState) {
+            this.logger.debug(
+                `Skipping alert for high-value spot trade (no position found): ${candidate.wallet} ${candidate.coin} ${formatCurrency(candidate.totalNotional)} (${candidate.direction})`
+            );
+            return;
+        }
 
-        const alertChannels = config.hyperliquid.mainCoins.some((c) =>
-            candidate.coin.toLowerCase().includes(c.toLowerCase())
-        )
-            ? this.mainSpotChannels
-            : this.otherSpotChannels;
+        const upstreamTotalNotional = parseFloat(positionState.total) * parseFloat(positionState.px);
+        if (upstreamTotalNotional < config.hyperliquid.minSpotNotionalUSD) {
+            this.logger.debug(
+                `Skipping alert for high-value spot trade (upstream notional too low): ${candidate.wallet} ${candidate.coin} ${formatCurrency(upstreamTotalNotional)} (${candidate.direction})`
+            );
+            return;
+        }
+
+        candidate.totalNotional = upstreamTotalNotional;
+        await HyperliquidDBService.updateTradeNotional(candidate.id, candidate.totalNotional);
 
         const lastAlerts = await HyperliquidDBService.getLastAlerts(
             candidate.wallet,
@@ -1020,7 +1142,6 @@ export default class HyperliquidService extends Tracker {
             candidate.direction,
             alertChannels.map((c) => c.chatId)
         );
-
         if (lastAlerts.size > 0) {
             const latestAlert = [...lastAlerts.values()].reduce((a, b) =>
                 new Date(a.sentAt) > new Date(b.sentAt) ? a : b
@@ -1071,8 +1192,7 @@ export default class HyperliquidService extends Tracker {
             `Sending spot alert: ${candidate.wallet} ${candidate.coin} ${formatCurrency(candidate.totalNotional)} (${candidate.direction})`
         );
 
-        const accountTag = classifyAccountTag(state, portfolio);
-        const result = this.formatSpotAlertMessage(candidate.coin, candidate.wallet, candidate, accountTag);
+        const result = this.formatSpotAlertMessage({ candidate, state, portfolio });
         if (!result) return;
         const { msg, buttons } = result;
 
@@ -1123,29 +1243,29 @@ export default class HyperliquidService extends Tracker {
         }
     }
 
-    private formatAlertMessage(
-        coin: string,
-        buyer: string,
-        context: AlertContext
-    ): {
+    private formatAlertMessage(context: AlertContext): {
         msg: string;
         buttons: InlineKeyboardMarkup;
     } | null {
-        if (!context.positionState.position || !context.state.perp) return null;
-        const state = context.state.perp;
-        const { direction, rank, pnl, entryPrice } = this.api.extractPositionDetails(context.positionState.position);
+        if (context.candidate.direction === 'spot')
+            throw new Error(`Invalid direction for perp alert: ${context.candidate.direction}`);
+        if (!context.state.perp || !context.state.spot) return null;
+        const accountTag = classifyAccountTag(context.state, context.portfolio);
+        const perpState = context.state.perp;
+        const candidate = context.candidate;
 
-        const accountValue = parseFloat(state.marginSummary?.accountValue || '0');
-        const coinsTraded = state.assetPositions ? state.assetPositions.length : 0;
-        const posTrades = context.aggregateTradeCount ?? 1;
+        const positionState = perpState.assetPositions?.find((pos) => pos.position?.coin === candidate.coin);
+        const { direction, rank, pnl, entryPrice } = this.api.extractPositionDetails(positionState?.position!);
+
+        const posTrades = candidate.tradeCount ?? 1;
         const directionIcon = direction === 'long' ? '🟢' : '🔴';
         const directionLabel = direction === 'long' ? 'Long' : 'Short';
-        const positionSize = context.aggregateTotalNotional ?? 0;
+        const positionSize = candidate.totalNotional ?? 0;
 
         const lines = [
             `🐋 <b>NEW WHALE ALERT</b> 🐋`,
             '',
-            `${directionIcon} <b>Coin:</b> <code>${escapeHtml(coin)}</code> (${directionLabel})`,
+            `${directionIcon} <b>Coin:</b> <code>${escapeHtml(candidate.coin)}</code> (${directionLabel})`,
             '',
             `<b>Leverage:</b> <code>${rank.toFixed(2)}x</code>`,
             `<b>Entry Price:</b> <code>${escapeHtml(entryPrice)}</code>`,
@@ -1154,10 +1274,14 @@ export default class HyperliquidService extends Tracker {
             `<b>Total Trades:</b> ${posTrades}`,
             '',
             `📈 <b>Trader Profile</b> 📈`,
-            `Wallet: <code>${escapeHtml(buyer)}</code>`,
-            `Account Value: <code>${formatCurrency(accountValue)}</code>`,
-            `Coins Traded: ${coinsTraded}`,
-            `Account: #${context.accountTag}`
+            `Wallet: <code>${escapeHtml(candidate.wallet)}</code>`,
+            `Value: <code>${formatCurrency(accountTag.totalValue)}</code>`,
+            `Perps Value: <code>${formatCurrency(accountTag.perpsValue)}</code>`,
+            `Perps Positions: ${accountTag.perpsCount}`,
+            `Spot Value: <code>${formatCurrency(accountTag.spotValue)}</code>`,
+            `Spot Assets: ${accountTag.spotCount}`,
+            '',
+            `Account: #${accountTag.tag}`
         ];
         return {
             msg: lines.join('\n'),
@@ -1166,35 +1290,42 @@ export default class HyperliquidService extends Tracker {
                     [
                         {
                             text: '🔗 View on Hypurrscan',
-                            url: `${this.explorer}/address/${encodeURIComponent(buyer)}`
+                            url: `${this.explorer}/address/${encodeURIComponent(candidate.wallet)}`
                         }
                     ],
-                    [Markup.button.callback('📌 Track Wallet', `track:${context.id}`, true)]
+                    [Markup.button.callback('📌 Track Wallet', `track:${context.candidate.id}`, true)]
                 ]
             }
         };
     }
 
-    public formatSpotAlertMessage(
-        coin: string,
-        wallet: string,
-        candidate: HyperAggregationRecord,
-        accountTag: string
-    ): { msg: string; buttons: InlineKeyboardMarkup } {
-        if (candidate.direction !== 'spot') throw new Error(`Invalid direction for spot alert: ${candidate.direction}`);
+    public formatSpotAlertMessage(context: AlertContext): { msg: string; buttons: InlineKeyboardMarkup } | null {
+        if (context.candidate.direction !== 'spot')
+            throw new Error(`Invalid direction for spot alert: ${context.candidate.direction}`);
+        if (!context.state.perp || !context.state.spot) return null;
+        const accountTag = classifyAccountTag(context.state, context.portfolio);
+        const candidate = context.candidate;
+
         const icon = '🔶';
         const posTrades = candidate.tradeCount ?? 1;
 
         const lines = [
             `🐋 <b>SPOT WHALE ALERT</b> 🐋`,
             '',
-            `${icon} <b>Coin:</b> <code>${escapeHtml(coin)}</code>`,
+            `${icon} <b>Coin:</b> <code>${escapeHtml(candidate.coin)}</code>`,
             '',
             `<b>Size:</b> <code>${formatCurrency(candidate.totalNotional)}</code>`,
             `<b>Total Trades:</b> ${posTrades}`,
             '',
-            `Wallet: <code>${escapeHtml(wallet)}</code>`,
-            `Account: #${accountTag}`
+            `📈 <b>Trader Profile</b> 📈`,
+            `Wallet: <code>${escapeHtml(candidate.wallet)}</code>`,
+            `Value: <code>${formatCurrency(accountTag.totalValue)}</code>`,
+            `Perps Value: <code>${formatCurrency(accountTag.perpsValue)}</code>`,
+            `Perps Positions: ${accountTag.perpsCount}`,
+            `Spot Value: <code>${formatCurrency(accountTag.spotValue)}</code>`,
+            `Spot Holdings: ${accountTag.spotCount}`,
+            '',
+            `Account: #${accountTag.tag}`
         ];
 
         return {
@@ -1204,7 +1335,7 @@ export default class HyperliquidService extends Tracker {
                     [
                         {
                             text: '🔗 View on Hypurrscan',
-                            url: `${this.explorer}/address/${encodeURIComponent(wallet)}`
+                            url: `${this.explorer}/address/${encodeURIComponent(candidate.wallet)}`
                         }
                     ]
                 ]
@@ -1219,5 +1350,23 @@ export default class HyperliquidService extends Tracker {
             `<b>${formatCurrency(currentNotional)}</b>  ⬅  ${formatCurrency(previousNotional)}`
         ];
         return lines.join('\n');
+    }
+
+    private getAlertChannels(coin: string, direction: HyperTradeDirection): ChatChannel[] {
+        switch (direction) {
+            case 'long':
+            case 'short': {
+                return config.hyperliquid.mainCoins.some((c) => coin.toLowerCase() === c.toLowerCase())
+                    ? this.mainPerpChannels
+                    : this.otherPerpChannels;
+            }
+            case 'spot': {
+                return config.hyperliquid.mainCoins.some(
+                    (c) => coin.toLowerCase().split('/')[0] === ('u' + c).toLowerCase()
+                )
+                    ? this.mainSpotChannels
+                    : this.otherSpotChannels;
+            }
+        }
     }
 }

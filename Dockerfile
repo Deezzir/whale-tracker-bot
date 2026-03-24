@@ -1,6 +1,9 @@
 FROM oven/bun:latest
 
+ENV PUPPETEER_SKIP_DOWNLOAD=true
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    chromium \
     ca-certificates \
     fonts-liberation \
     libasound2 \

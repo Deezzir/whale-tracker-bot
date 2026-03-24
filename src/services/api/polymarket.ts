@@ -65,14 +65,18 @@ export interface Trade {
 
 const PAGE_SIZE = 100;
 const MAX_OFFSET = 3000;
+const REQ_TIMEOUT = 10 * 1000; // 10 seconds
+
+const axiosConfig = { headers: { 'Content-Type': 'application/json' }, timeout: REQ_TIMEOUT };
 
 export default class PolymarketAPIService {
     private gammaLimiter = new RateLimiter(config.polymarket.gammaApiRateLimit);
     private dataLimiter = new RateLimiter(config.polymarket.dataApiRateLimit);
+    private redis = getRedisClient();
+
     private marketCacheKey = (slug: string) => `gamma:market:${slug}`;
     private walletCacheKey = (proxyWallet: string) => `gamma:wallet:${proxyWallet}`;
     private walletStatsCacheKey = (proxyWallet: string) => `gamma:wallet-stats:${proxyWallet}`;
-    private redis = getRedisClient();
 
     public async getMarketBySlug(slug: string): Promise<Market | null> {
         const cached = await this.redis.get(this.marketCacheKey(slug));
@@ -83,7 +87,7 @@ export default class PolymarketAPIService {
 
         try {
             const url = `${config.polymarket.gammaApi}/markets/slug/${slug}`;
-            const result = await axios.get<Market>(url, { params: { include_tag: true } });
+            const result = await axios.get<Market>(url, { ...axiosConfig, params: { include_tag: true } });
 
             await this.redis.setEx(
                 this.marketCacheKey(slug),
@@ -114,6 +118,7 @@ export default class PolymarketAPIService {
         try {
             const url = `${config.polymarket.dataApi}/activity`;
             const { data } = await axios.get<Trade[]>(url, {
+                ...axiosConfig,
                 params: {
                     user: proxyWallet,
                     sortBy: 'TIMESTAMP',
@@ -157,6 +162,7 @@ export default class PolymarketAPIService {
         try {
             const url = `${config.polymarket.dataApi}/activity`;
             const { data } = await axios.get<Trade[]>(url, {
+                ...axiosConfig,
                 params: {
                     user: proxyWallet,
                     sortBy: 'TIMESTAMP',

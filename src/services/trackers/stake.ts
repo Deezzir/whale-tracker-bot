@@ -11,10 +11,11 @@ import DBService, {
 } from '../db/stake';
 import { Tracker } from '../../common/tracker';
 import { InlineKeyboardMarkup } from 'telegraf/types';
-import { capitalize, formatCurrency, sleep } from '../../common/utils';
+import { capitalize, formatCurrency, sleep, withTimeout } from '../../common/utils';
 import puppeteer from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import ProxyService, { Proxy } from '../proxies';
+import { getRedisClient } from '../redis';
 
 interface Payload {
     type: string;
@@ -165,7 +166,6 @@ export default class StakeService extends Tracker {
     private url = config.stake.url;
     private proxy: Proxy | null = this.useProxy ? ProxyService.getRandomProxy() : null;
 
-    private stakeCurrenciesKey = 'stake:currencies';
     private page: Page | null = null;
     private browser: Browser | null = null;
     private betsBatch: Partial<StakeBetDocument>[] = [];
@@ -207,8 +207,8 @@ export default class StakeService extends Tracker {
         await this.monitorTask?.catch((error) => this.logger.error(`Error while awaiting monitor task: ${error}`));
         this.monitorTask = undefined;
         this.logger.info('Monitoring stopped');
-        if (this.page) this.page.close().catch(() => {});
-        if (this.browser) this.browser.close().catch(() => {});
+        if (this.page) this.page.close().catch(() => { });
+        if (this.browser) this.browser.close().catch(() => { });
         if (this.betsBatchInterval) clearInterval(this.betsBatchInterval);
         this.page = null;
         this.browser = null;
@@ -229,6 +229,7 @@ export default class StakeService extends Tracker {
     private async initBrowser(): Promise<Browser> {
         return await puppeteer.launch({
             headless: config.puppeteer.headless,
+            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
             userDataDir: config.puppeteer.userDir ? config.puppeteer.userDir : undefined,
             args: this.browserArgs,
             defaultViewport: { width: 1366, height: 768 }
@@ -275,20 +276,31 @@ export default class StakeService extends Tracker {
                 await this.cancellableSleep(config.monitor.cleanupIntervalMs);
             }
         };
-        await Promise.all([scanLoop(), cleanupLoop(), this.watchDog(config.monitor.noDataTimeoutMs)]);
+        await Promise.all([
+            scanLoop(),
+            cleanupLoop(),
+            this.watchDog(config.monitor.noDataTimeoutMs),
+            this.scanWatchDog(config.monitor.scanStallTimeoutMs)
+        ]);
     }
 
     private async scanAndAlert(): Promise<void> {
+        const CANDIDATE_TIMEOUT_MS = 20_000;
         const candidates = await DBService.getStakeBetsToAlert(config.stake.minAlertBetUSD, config.stake.alertAgeMs);
 
         this.logger.info(`Found ${candidates.length} candidates needing alert`);
         for (const candidate of candidates) {
             try {
-                await this.processAlertCandidate(candidate);
+                await withTimeout(
+                    this.processAlertCandidate(candidate),
+                    CANDIDATE_TIMEOUT_MS,
+                    `processAlertCandidate(${candidate.iid})`
+                );
             } catch (error) {
                 this.logger.error(`Failed to alert bet ${candidate.iid}: ${error}`);
             }
         }
+        this.lastScanTimestamp = Date.now();
     }
 
     private async processAlertCandidate(candidate: StakeBetRecord): Promise<void> {
@@ -408,7 +420,10 @@ export default class StakeService extends Tracker {
     }
 
     private async fetchCurrencies(): Promise<Map<string, number>> {
-        const cached = await this.redis.get(this.stakeCurrenciesKey);
+        const stakeCurrenciesKey = 'stake:currencies';
+        const redis = getRedisClient();
+
+        const cached = await redis.get(stakeCurrenciesKey);
         if (cached) return new Map(JSON.parse(cached));
 
         if (!this.page) throw new Error('Puppeteer page is not initialized');
@@ -442,7 +457,7 @@ export default class StakeService extends Tracker {
             if (!usd) continue;
             rateMap.set(currency.name, usd.rate);
         }
-        await this.redis.setEx(this.stakeCurrenciesKey, config.monitor.cacheTTLMs / 1000, JSON.stringify([...rateMap]));
+        await redis.setEx(stakeCurrenciesKey, config.monitor.cacheTTLMs / 1000, JSON.stringify([...rateMap]));
         return rateMap;
     }
 
@@ -454,11 +469,11 @@ export default class StakeService extends Tracker {
 
         try {
             if (this.page) {
-                await this.page.close().catch(() => {});
+                await this.page.close().catch(() => { });
                 this.page = null;
             }
             if (this.browser) {
-                await this.browser.close().catch(() => {});
+                await this.browser.close().catch(() => { });
                 this.browser = null;
             }
 
@@ -505,7 +520,7 @@ export default class StakeService extends Tracker {
                     if (manager[wsKey]) {
                         try {
                             manager[wsKey].close();
-                        } catch {}
+                        } catch { }
                         manager[wsKey] = null;
                     }
                     if (manager[intervalKey]) {
@@ -605,6 +620,8 @@ export default class StakeService extends Tracker {
     }
 
     private async handleMessage(message: any): Promise<void> {
+        const MIN_BET_USD = 1_000;
+
         try {
             const parsed = JSON.parse(message);
             if (parsed.type === 'log') {
@@ -618,7 +635,6 @@ export default class StakeService extends Tracker {
             if (parsed.type !== 'next') return;
 
             const betData = parsed.payload?.data?.allSportBets || parsed.payload?.data?.highrollerSportBets;
-            const source = parsed.payload?.data?.allSportBets ? 'AllSportBets' : 'HighrollerSportBets';
             if (!betData?.bet) return;
 
             const betRaw = betData.bet;
@@ -694,6 +710,9 @@ export default class StakeService extends Tracker {
                 if (!rate) return 0;
                 return betRaw.amount * rate;
             })();
+
+            if (amountUSD < MIN_BET_USD) return;
+
             await this.handleBet({
                 type: betRaw.__typename,
                 potentialMultiplier: betRaw.potentialMultiplier ?? betRaw.betPotentialMultiplier ?? null,
@@ -701,10 +720,6 @@ export default class StakeService extends Tracker {
                 iid: betData.iid,
                 outcomes
             });
-            if (amountUSD >= 1000)
-                this.logger.debug(
-                    `Detected high-value bet: IID ${betData.iid} ${formatCurrency(amountUSD)} (${source})`
-                );
         } catch (err) {
             this.logger.error(`Error parsing message: ${err}`);
         }

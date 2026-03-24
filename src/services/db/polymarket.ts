@@ -3,13 +3,10 @@ import Logger from '../../common/logger';
 
 const logger = new Logger('PolymarketDB');
 
-export interface PolyTrade {
-    transactionHash: string;
-    asset: string;
+export interface PolyTradeInput {
     proxyWallet: string;
     conditionId: string;
     side: 'BUY' | 'SELL';
-    size: number;
     price: number;
     usdAmount: number;
     outcome: string;
@@ -19,31 +16,49 @@ export interface PolyTrade {
     slug?: string;
 }
 
-interface PolyTradeDocument extends PolyTrade, Document {}
+interface PolyAggregationDocument extends Document {
+    proxyWallet: string;
+    conditionId: string;
+    outcomeIndex: number;
+    dateKey: string;
+    outcome: string;
+    title: string;
+    slug: string;
+    totalBuyUsd: number;
+    totalSellUsd: number;
+    netUsd: number;
+    priceSum: number;
+    tradeCount: number;
+    firstTradeAt: Date;
+    lastTradeAt: Date;
+}
 
-const PolyTradeSchema = new Schema<PolyTradeDocument>(
+const PolyAggregationSchema = new Schema<PolyAggregationDocument>(
     {
-        transactionHash: { type: String, required: true, unique: true },
-        asset: { type: String, required: true },
         proxyWallet: { type: String, required: true },
         conditionId: { type: String, required: true },
-        side: { type: String, required: true, enum: ['BUY', 'SELL'] },
-        size: { type: Number, required: true },
-        price: { type: Number, required: true },
-        usdAmount: { type: Number, required: true },
-        outcome: { type: String, required: true },
         outcomeIndex: { type: Number, required: true },
-        timestamp: { type: Date, required: true },
-        title: { type: String },
-        slug: { type: String }
+        dateKey: { type: String, required: true },
+        outcome: { type: String, default: '' },
+        title: { type: String, default: '' },
+        slug: { type: String, default: '' },
+        totalBuyUsd: { type: Number, default: 0 },
+        totalSellUsd: { type: Number, default: 0 },
+        netUsd: { type: Number, default: 0 },
+        priceSum: { type: Number, default: 0 },
+        tradeCount: { type: Number, default: 0 },
+        firstTradeAt: { type: Date },
+        lastTradeAt: { type: Date }
     },
     { timestamps: true }
 );
 
-PolyTradeSchema.index({ proxyWallet: 1, conditionId: 1, outcomeIndex: 1 });
-PolyTradeSchema.index({ timestamp: 1 });
+PolyAggregationSchema.index({ proxyWallet: 1, conditionId: 1, outcomeIndex: 1, dateKey: 1 }, { unique: true });
+PolyAggregationSchema.index({ dateKey: 1, netUsd: 1 });
 
-const PolyTradeModel = mongoose.models.PolyTrade || mongoose.model<PolyTradeDocument>('PolyTrade', PolyTradeSchema);
+const PolyAggregationModel =
+    mongoose.models.PolyAggregation ||
+    mongoose.model<PolyAggregationDocument>('PolyAggregation', PolyAggregationSchema);
 
 interface PolyAlert {
     proxyWallet: string;
@@ -97,29 +112,79 @@ export interface PositionKey {
 }
 
 export default class PolymarketDBService {
-    static async addTradesBulk(tradeList: PolyTrade[]): Promise<boolean> {
+    private static formatDateKey(timestamp: number, windowMs?: number): string {
+        if (!windowMs) {
+            return new Date(timestamp).toISOString().slice(0, 10);
+        }
+        const bucketStart = Math.floor(timestamp / windowMs) * windowMs;
+        return new Date(bucketStart).toISOString();
+    }
+
+    static async addTradesBulk(tradeList: PolyTradeInput[], windowMs?: number): Promise<boolean> {
         if (tradeList.length === 0) return true;
         try {
-            const result = await PolyTradeModel.insertMany(tradeList, { ordered: false });
-            return result.length > 0;
-        } catch (err: any) {
-            if (err?.code === 11000 || err?.name === 'MongoBulkWriteError') {
-                const inserted = err?.result?.insertedCount ?? 0;
-                return inserted > 0;
-            }
-            logger.error(`Error inserting trade batch: ${err}`);
-            throw err;
+            const bulkOps = tradeList.map((trade) => {
+                const dateKey = this.formatDateKey(trade.timestamp.getTime(), windowMs);
+                const isBuy = trade.side === 'BUY';
+                return {
+                    updateOne: {
+                        filter: {
+                            proxyWallet: trade.proxyWallet,
+                            conditionId: trade.conditionId,
+                            outcomeIndex: trade.outcomeIndex,
+                            dateKey
+                        },
+                        update: {
+                            $inc: {
+                                totalBuyUsd: isBuy ? trade.usdAmount : 0,
+                                totalSellUsd: isBuy ? 0 : trade.usdAmount,
+                                netUsd: isBuy ? trade.usdAmount : -trade.usdAmount,
+                                priceSum: trade.price,
+                                tradeCount: 1
+                            },
+                            $min: { firstTradeAt: trade.timestamp },
+                            $max: { lastTradeAt: trade.timestamp },
+                            $set: {
+                                outcome: trade.outcome,
+                                title: trade.title || '',
+                                slug: trade.slug || ''
+                            }
+                        },
+                        upsert: true
+                    }
+                };
+            });
+
+            const start = performance.now();
+            const result = await PolyAggregationModel.bulkWrite(bulkOps, { ordered: false });
+            logger.debug(`addTradesBulk: ${bulkOps.length} ops in ${(performance.now() - start).toFixed(1)}ms`);
+            return result.ok === 1;
+        } catch (error) {
+            logger.error(`Error inserting trade batch: ${error}`);
+            throw error;
         }
     }
 
     static async cleanTrades(ttlMs: number): Promise<number> {
         try {
             const cutoff = new Date(Date.now() - ttlMs);
-            const result = await PolyTradeModel.deleteMany({ timestamp: { $lt: cutoff } });
-            logger.info(`Deleted ${result.deletedCount} old trade records`);
+            const result = await PolyAggregationModel.deleteMany({ updatedAt: { $lt: cutoff } });
+            logger.info(`Deleted ${result.deletedCount} old aggregation records`);
             return result.deletedCount;
         } catch (error) {
             logger.error(`Error cleaning trades: ${error}`);
+            throw error;
+        }
+    }
+
+    static async cleanAlerts(ttlMs: number): Promise<number> {
+        try {
+            const cutoff = new Date(Date.now() - ttlMs);
+            const result = await PolyAlertModel.deleteMany({ sentAt: { $lt: cutoff } });
+            logger.info(`Deleted ${result.deletedCount} old alert records`);
+            return result.deletedCount;
+        } catch (error) {
+            logger.error(`Error cleaning alerts: ${error}`);
             throw error;
         }
     }
@@ -128,80 +193,43 @@ export default class PolymarketDBService {
         keysToScan: PositionKey[],
         threshold: number,
         sportThreshold: number,
-        windowMs: number
+        windowMs?: number
     ): Promise<PolyAggregationRecord[]> {
         try {
-            const windowStart = new Date(Date.now() - windowMs);
-            const minThreshold = Math.min(threshold, sportThreshold);
-            const matchStage: Record<string, unknown> = { timestamp: { $gte: windowStart } };
             if (keysToScan.length === 0) return [];
+            const dateKey = this.formatDateKey(Date.now(), windowMs);
+            const minThreshold = Math.min(threshold, sportThreshold);
 
-            matchStage.$or = keysToScan.map((k) => ({
-                proxyWallet: k.proxyWallet,
-                conditionId: k.conditionId,
-                outcomeIndex: k.outcomeIndex
-            }));
+            const start = performance.now();
+            const docs = await PolyAggregationModel.find({
+                dateKey,
+                netUsd: { $gte: minThreshold },
+                $or: keysToScan.map((k) => ({
+                    proxyWallet: k.proxyWallet,
+                    conditionId: k.conditionId,
+                    outcomeIndex: k.outcomeIndex
+                }))
+            })
+                .lean()
+                .exec();
+            logger.debug(
+                `getTradesToAlert: ${keysToScan.length} keys, ${docs.length} results in ${(performance.now() - start).toFixed(1)}ms`
+            );
 
-            type AggResult = {
-                _id: { wallet: string; cond: string; outcome: number };
-                outcome: string;
-                title: string;
-                slug: string;
-                totalBuyUsd: number;
-                totalSellUsd: number;
-                netUsd: number;
-                avgPrice: number;
-                tradeCount: number;
-                firstTradeAt: Date;
-                lastTradeAt: Date;
-            };
-
-            const results = await PolyTradeModel.aggregate<AggResult>([
-                { $match: matchStage },
-                {
-                    $group: {
-                        _id: {
-                            wallet: '$proxyWallet',
-                            cond: '$conditionId',
-                            outcome: '$outcomeIndex'
-                        },
-                        outcome: { $first: '$outcome' },
-                        title: { $first: '$title' },
-                        slug: { $first: '$slug' },
-                        totalBuyUsd: {
-                            $sum: { $cond: [{ $eq: ['$side', 'BUY'] }, '$usdAmount', 0] }
-                        },
-                        totalSellUsd: {
-                            $sum: { $cond: [{ $eq: ['$side', 'SELL'] }, '$usdAmount', 0] }
-                        },
-                        avgPrice: { $avg: '$price' },
-                        tradeCount: { $sum: 1 },
-                        firstTradeAt: { $min: '$timestamp' },
-                        lastTradeAt: { $max: '$timestamp' }
-                    }
-                },
-                {
-                    $addFields: {
-                        netUsd: { $subtract: ['$totalBuyUsd', '$totalSellUsd'] }
-                    }
-                },
-                { $match: { netUsd: { $gte: minThreshold } } }
-            ]);
-
-            return results.map((r) => ({
-                wallet: r._id.wallet,
-                conditionId: r._id.cond,
-                outcomeIndex: r._id.outcome,
-                outcome: r.outcome,
-                title: r.title || '',
-                slug: r.slug || '',
-                totalBuyUsd: r.totalBuyUsd,
-                totalSellUsd: r.totalSellUsd,
-                netUsd: r.netUsd,
-                avgPrice: r.avgPrice,
-                tradeCount: r.tradeCount,
-                firstTradeAt: r.firstTradeAt,
-                lastTradeAt: r.lastTradeAt
+            return docs.map((d) => ({
+                wallet: d.proxyWallet,
+                conditionId: d.conditionId,
+                outcomeIndex: d.outcomeIndex,
+                outcome: d.outcome || '',
+                title: d.title || '',
+                slug: d.slug || '',
+                totalBuyUsd: d.totalBuyUsd,
+                totalSellUsd: d.totalSellUsd,
+                netUsd: d.netUsd,
+                avgPrice: d.tradeCount > 0 ? d.priceSum / d.tradeCount : 0,
+                tradeCount: d.tradeCount,
+                firstTradeAt: d.firstTradeAt,
+                lastTradeAt: d.lastTradeAt
             }));
         } catch (error) {
             logger.error(`Error retrieving trades to alert: ${error}`);
@@ -217,11 +245,15 @@ export default class PolymarketDBService {
     ): Promise<Map<number, PolyAlert>> {
         if (chatIds.length === 0) return new Map();
         try {
+            const start = performance.now();
             const docs = await PolyAlertModel.aggregate<{ _id: number; doc: PolyAlert }>([
                 { $match: { proxyWallet, conditionId, outcomeIndex, chatId: { $in: chatIds } } },
                 { $sort: { sentAt: -1 } },
                 { $group: { _id: '$chatId', doc: { $first: '$$ROOT' } } }
             ]);
+            logger.debug(
+                `getLastAlerts: wallet=${proxyWallet}, ${docs.length} results in ${(performance.now() - start).toFixed(1)}ms`
+            );
             const result = new Map<number, PolyAlert>();
             for (const { _id, doc } of docs) {
                 result.set(_id, doc);

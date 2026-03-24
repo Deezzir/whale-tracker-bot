@@ -39,22 +39,23 @@ export const config = {
         ownerUserID: parseInt(requireEnv('OWNER_USER_ID'), 10)
     },
     monitor: {
-        cacheTTLMs: 5 * 60 * 1000, // 5 minutes,
+        cacheTTLMs: 5 * 60 * 1000, // 2 minutes,
         intervalMs: 30 * 1000, // 30 secondss
         cleanupIntervalMs: 60 * 60 * 1000, // 1 hour
-        noDataTimeoutMs: 5 * 60 * 1000 // 5 minutes
+        noDataTimeoutMs: 5 * 60 * 1000, // 5 minutes
+        scanStallTimeoutMs: 5 * 60 * 1000 // 5 minutes
     },
     hyperliquid: {
-        minSuspiciousNotionalUSD: parseFloat(optionalEnv('HS_MIN_NOTIONAL_USD', '250000')),
+        minNotionalUSD: parseFloat(optionalEnv('HS_MIN_NOTIONAL_USD', '250000')),
         minSpotNotionalUSD: parseFloat(optionalEnv('HS_MIN_SPOT_NOTIONAL_USD', '300000')),
-        aggregationWindowMs: parseInt(optionalEnv('HS_AGGREGATION_WINDOW_MS', String(24 * 60 * 60 * 1000)), 10),
+        aggregationWindowMs: parseInt(optionalEnv('HS_AGGREGATION_WINDOW_MS', String(3 * 24 * 60 * 60 * 1000)), 10),
         minimalGrowthPercent: parseFloat(optionalEnv('HS_POS_CHANGE_ALERT_PERCENT', '20')),
         minimalGrowthUSD: parseFloat(optionalEnv('HS_POS_CHANGE_ALERT_USD', '50000')),
         mainCoins: ['BTC', 'ETH', 'SOL'] as string[],
-        batchSize: 1000,
         wss: 'wss://api.hyperliquid.xyz/ws',
         api: 'https://api.hyperliquid.xyz/info',
         explorer: 'https://hypurrscan.io',
+        batchSize: 1000,
         freshWindowMs: 2 * 24 * 60 * 60 * 1000, // 2 days,
         checkIntervalMs: 30 * 60 * 1000, // 30 minutes
         batchFlushIntervalMs: 60 * 1000, // 1 minute
@@ -73,18 +74,17 @@ export const config = {
     polymarket: {
         alertThresholdUsd: Number(optionalEnv('POLY_ALERT_THRESHOLD_USD', '100000')),
         sportAlertThresholdUsd: Number(optionalEnv('POLY_SPORT_BET_ALERT_THRESHOLD_USD', '500000')),
-        reAlertThresholdPercent: Number(optionalEnv('POLY_RE_ALERT_THRESHOLD_PERCENT', '20')),
         maxPriceFilter: Number(optionalEnv('POLY_MAX_PRICE_FILTER', '0.98')),
+        minimalGrowthPercent: parseFloat(optionalEnv('POLY_POS_CHANGE_ALERT_PERCENT', '20')),
+        minimalGrowthUSD: parseFloat(optionalEnv('POLY_POS_CHANGE_ALERT_USD', '9000')),
+        aggregationWindowMs: parseInt(optionalEnv('POLY_AGGREGATION_WINDOW_MS', String(7 * 24 * 60 * 60 * 1000)), 10),
         url: 'https://polymarket.com',
         wss: 'wss://ws-live-data.polymarket.com',
         dataApi: 'https://data-api.polymarket.com',
         gammaApi: 'https://gamma-api.polymarket.com',
-        minTradeUSD: 50,
         dataApiRateLimit: 5,
         gammaApiRateLimit: 2,
         batchSize: 50,
-        minimalGrowthPercent: parseFloat(optionalEnv('POLY_POS_CHANGE_ALERT_PERCENT', '20')),
-        minimalGrowthUSD: parseFloat(optionalEnv('POLY_POS_CHANGE_ALERT_USD', '9000')),
         batchFlushIntervalMs: 10 * 1000, // 30 seconds
         cleanupTTLms: 7 * 24 * 60 * 60 * 1000 // 7 days
     },

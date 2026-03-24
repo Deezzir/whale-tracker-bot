@@ -42,12 +42,14 @@ interface TraderPerpState {
 }
 
 interface TraderSpotState {
+    accountValue: string;
     balances: {
         coin: string;
         token: number;
         hold: string;
         total: string;
         entryNtl: string;
+        px: string;
     }[];
 }
 
@@ -95,21 +97,54 @@ interface SpotMeta {
     }[];
 }
 
+interface PerpDex {
+    name: string;
+    fullName: string;
+    deployer: string;
+    oracleUpdater: string | null;
+    feeRecipient: string | null;
+    assetToStreamingOiCap: string[][];
+    assetToFundingMultiplier: string[][];
+}
+
+const REQ_TIMEOUT = 10 * 1000; // 10 seconds
+
+const axiosConfig = { headers: { 'Content-Type': 'application/json' }, timeout: REQ_TIMEOUT };
+
 export default class HyperliquidAPI {
     private api = config.hyperliquid.api;
-    private perpStatsKey = 'trade:perpStats';
-    private spotStatsKey = 'trade:spotStats';
-    private portfolioCacheKey = 'trade:portfolioCache';
-    private clearinghouseCacheKey = 'trade:clearinghouseCache';
     private redis = getRedisClient();
 
-    public async getPerpStats(): Promise<PerpsMeta | null> {
-        const cachedPerps = await this.redis.get(this.perpStatsKey);
+    private portfolioCacheKey = (user: string) => `hs:portfolio:${user}`;
+    private clearinghouseCacheKey = (type: 'spot' | 'perp', user: string, dex?: string) =>
+        `hs:clearinghouse:${type}:${dex ? dex : 'default'}:${user}`;
+    private perpDexesCacheKey = (dex?: string) => `hs:perp-meta:${dex ? dex : 'default'}`;
+
+    public async fetchPerpDexes(): Promise<(PerpDex | null)[] | null> {
+        const cacheKey = 'hs:perp-dexes';
+
+        const cachedDexes = await this.redis.get(cacheKey);
+        if (cachedDexes) return JSON.parse(cachedDexes);
+
+        try {
+            const operation = () => axios.post(this.api, { type: 'perpDexs' }, axiosConfig);
+            const response = await retryWithBackoff(operation);
+
+            const data = response.data;
+            await this.redis.setEx(cacheKey, config.monitor.cacheTTLMs / 1000, JSON.stringify(data));
+            return data as PerpDex[];
+        } catch (error) {
+            logger.error(`Failed to fetch perp dexes: ${error}`);
+            return null;
+        }
+    }
+
+    public async fetchPerpMeta(dex?: string): Promise<PerpsMeta | null> {
+        const cachedPerps = await this.redis.get(this.perpDexesCacheKey(dex));
         if (cachedPerps) return JSON.parse(cachedPerps);
 
         try {
-            const operation = () =>
-                axios.post(this.api, { type: 'metaAndAssetCtxs' }, { headers: { 'Content-Type': 'application/json' } });
+            const operation = () => axios.post(this.api, { type: 'metaAndAssetCtxs', dex }, axiosConfig);
             const response = await retryWithBackoff(operation);
             const data = response.data;
 
@@ -117,7 +152,7 @@ export default class HyperliquidAPI {
                 universe: data[0].universe,
                 assetMeta: data[1]
             };
-            await this.redis.setEx(this.perpStatsKey, config.monitor.cacheTTLMs / 1000, JSON.stringify(meta));
+            await this.redis.setEx(this.perpDexesCacheKey(dex), config.monitor.cacheTTLMs / 1000, JSON.stringify(meta));
             return meta;
         } catch (error) {
             logger.error(`Failed to fetch perp stats: ${error}`);
@@ -125,17 +160,14 @@ export default class HyperliquidAPI {
         }
     }
 
-    public async getSpotStats(): Promise<SpotMeta | null> {
-        const cachedSpot = await this.redis.get(this.spotStatsKey);
+    public async fetchSpotMeta(): Promise<SpotMeta | null> {
+        const cacheKey = 'hs:spot-meta';
+
+        const cachedSpot = await this.redis.get(cacheKey);
         if (cachedSpot) return JSON.parse(cachedSpot);
 
         try {
-            const operation = () =>
-                axios.post(
-                    this.api,
-                    { type: 'spotMetaAndAssetCtxs' },
-                    { headers: { 'Content-Type': 'application/json' } }
-                );
+            const operation = () => axios.post(this.api, { type: 'spotMetaAndAssetCtxs' }, axiosConfig);
             const response = await retryWithBackoff(operation);
             const data = response.data;
 
@@ -144,7 +176,7 @@ export default class HyperliquidAPI {
                 universe: data[0].universe,
                 assetMeta: data[1]
             };
-            await this.redis.setEx(this.spotStatsKey, config.monitor.cacheTTLMs / 1000, JSON.stringify(meta));
+            await this.redis.setEx(cacheKey, config.monitor.cacheTTLMs / 1000, JSON.stringify(meta));
             return meta;
         } catch (error) {
             logger.error(`Failed to fetch spot stats: ${error}`);
@@ -153,16 +185,18 @@ export default class HyperliquidAPI {
     }
 
     public async fetchPortfolio(user: string): Promise<PortfolioResponse | null> {
-        const key = `${this.portfolioCacheKey}:${user}`;
-        const cached = await this.redis.get(key);
+        const cached = await this.redis.get(this.portfolioCacheKey(user));
         if (cached) return JSON.parse(cached);
 
         try {
-            const operation = () =>
-                axios.post(this.api, { type: 'portfolio', user }, { headers: { 'Content-Type': 'application/json' } });
+            const operation = () => axios.post(this.api, { type: 'portfolio', user }, axiosConfig);
             const response = await retryWithBackoff(operation);
             const data = response.data as PortfolioResponse;
-            await this.redis.setEx(key, config.monitor.cacheTTLMs / 1000, JSON.stringify(data));
+            await this.redis.setEx(
+                this.portfolioCacheKey(user),
+                config.monitor.cacheTTLMs / 1000,
+                JSON.stringify(data)
+            );
             return data;
         } catch (error) {
             logger.error(`Failed to fetch portfolio for ${user}: ${error}`);
@@ -171,18 +205,32 @@ export default class HyperliquidAPI {
     }
 
     private async fetchTraderSpotStats(user: string): Promise<TraderSpotState | null> {
-        const key = `${this.clearinghouseCacheKey}:spot:${user}`;
-        const cached = await this.redis.get(key);
+        const cached = await this.redis.get(this.clearinghouseCacheKey('spot', user));
         if (cached) return JSON.parse(cached);
 
         try {
-            const response = await axios.post(
-                this.api,
-                { type: 'spotClearinghouseState', user },
-                { headers: { 'Content-Type': 'application/json' } }
-            );
+            const operation = () => axios.post(this.api, { type: 'spotClearinghouseState', user }, axiosConfig);
+            const response = await retryWithBackoff(operation);
+
             const data = response.data as TraderSpotState;
-            await this.redis.setEx(key, config.monitor.cacheTTLMs / 1000, JSON.stringify(data));
+            const meta = await this.fetchSpotMeta();
+
+            if (meta) {
+                let accountValue = 0.0;
+                for (const balance of data.balances) {
+                    const universe = meta.universe.find((u) => meta.tokens[u.tokens[0]].name === balance.coin);
+                    const tokenMeta = meta.assetMeta[universe ? universe.index : -1];
+                    balance.px = tokenMeta ? tokenMeta.markPx : '0';
+                    accountValue += parseFloat(balance.total) * parseFloat(balance.px);
+                }
+                data.accountValue = accountValue.toString();
+            }
+
+            await this.redis.setEx(
+                this.clearinghouseCacheKey('spot', user),
+                config.monitor.cacheTTLMs / 1000,
+                JSON.stringify(data)
+            );
             return data;
         } catch (error) {
             logger.error(`Failed to fetch spot clearinghouse state for ${user}: ${error}`);
@@ -190,19 +238,50 @@ export default class HyperliquidAPI {
         }
     }
 
-    private async fetchTraderPerpStats(user: string): Promise<TraderPerpState | null> {
-        const key = `${this.clearinghouseCacheKey}:perp:${user}`;
-        const cached = await this.redis.get(key);
+    private async fetchTraderPerpStatsAll(user: string): Promise<TraderPerpState | null> {
+        try {
+            const dexes = await this.fetchPerpDexes();
+            if (!dexes) throw new Error('Failed to fetch perp dexes from Hyperliquid API');
+
+            const allPositions: AssetPosition[] = [];
+            let marginSummary: MarginSummary = {
+                accountValue: '0'
+            };
+
+            for (const dex of dexes) {
+                const stats = await this.fetchTraderPerpStats(user, dex?.name);
+                if (stats) {
+                    allPositions.push(...(stats.assetPositions || []));
+                    if (stats.marginSummary) {
+                        marginSummary.accountValue =
+                            parseFloat(marginSummary.accountValue || '0') +
+                            parseFloat(stats.marginSummary.accountValue || '0') +
+                            '';
+                    }
+                }
+            }
+
+            return { assetPositions: allPositions, marginSummary };
+        } catch (error) {
+            logger.error(`Failed to fetch perp clearinghouse state for ${user}: ${error}`);
+            return null;
+        }
+    }
+
+    private async fetchTraderPerpStats(user: string, dex?: string): Promise<TraderPerpState | null> {
+        const cached = await this.redis.get(this.clearinghouseCacheKey('perp', user, dex));
         if (cached) return JSON.parse(cached);
 
         try {
-            const response = await axios.post(
-                this.api,
-                { type: 'clearinghouseState', user },
-                { headers: { 'Content-Type': 'application/json' } }
-            );
+            const operation = () => axios.post(this.api, { type: 'clearinghouseState', user, dex }, axiosConfig);
+            const response = await retryWithBackoff(operation);
+
             const data = response.data as TraderPerpState;
-            await this.redis.setEx(key, config.monitor.cacheTTLMs / 1000, JSON.stringify(data));
+            await this.redis.setEx(
+                this.clearinghouseCacheKey('perp', user),
+                config.monitor.cacheTTLMs / 1000,
+                JSON.stringify(data)
+            );
             return data;
         } catch (error) {
             logger.error(`Failed to fetch clearinghouse state for ${user}: ${error}`);
@@ -211,29 +290,47 @@ export default class HyperliquidAPI {
     }
 
     public async fetchTraderState(user: string): Promise<TraderState> {
-        const [spot, perp] = await Promise.all([this.fetchTraderSpotStats(user), this.fetchTraderPerpStats(user)]);
+        const [spot, perp] = await Promise.all([this.fetchTraderSpotStats(user), this.fetchTraderPerpStatsAll(user)]);
         return { spot, perp };
     }
 
     public async fetchCoins(): Promise<string[]> {
-        const response = await axios.post(
-            this.api,
-            { type: 'meta' },
-            { headers: { 'Content-Type': 'application/json' } }
-        );
-        return response.data.universe.map((u: { name: string }) => u.name);
+        const cacheKey = 'hs:perp-coins-all';
+
+        const cached = await this.redis.get(cacheKey);
+        if (cached) return JSON.parse(cached);
+
+        try {
+            const dexes = await this.fetchPerpDexes();
+            if (!dexes) throw new Error('Failed to fetch perp dexes from Hyperliquid API');
+
+            const coins: string[] = [];
+            for (const dex of dexes) {
+                const dexMeta = await this.fetchPerpMeta(dex?.name);
+                if (!dexMeta) throw new Error(`Failed to fetch perp meta for dex ${dex?.name} from Hyperliquid API`);
+                const current = dexMeta.universe.map((u: { name: string }) => u.name);
+                coins.push(...current);
+            }
+            await this.redis.setEx(cacheKey, config.monitor.cacheTTLMs / 1000, JSON.stringify(coins));
+            return coins;
+        } catch (error) {
+            logger.error(`Failed to fetch coins: ${error}`);
+            return [];
+        }
     }
 
     public async fetchSpotCoins(): Promise<SpotWsPair[]> {
+        const cacheKey = 'hs:spot-coins-all';
+
+        const cached = await this.redis.get(cacheKey);
+        if (cached) return JSON.parse(cached);
+
         try {
-            const response = await axios.post(
-                this.api,
-                { type: 'spotMeta' },
-                { headers: { 'Content-Type': 'application/json' } }
-            );
-            const tokens: { name: string; index: number }[] = response.data.tokens;
-            const universe: { tokens: number[]; index: number; name: string }[] = response.data.universe;
-            return universe.map((pair) => {
+            const response = await this.fetchSpotMeta();
+            if (!response) throw new Error('Failed to fetch spot meta from Hyperliquid API');
+            const { tokens, universe } = response;
+
+            const coints = universe.map((pair) => {
                 const baseToken = tokens.find((t) => t.index === pair.tokens[0]);
                 const quoteToken = tokens.find((t) => t.index === pair.tokens[1]);
                 return {
@@ -241,6 +338,8 @@ export default class HyperliquidAPI {
                     displayName: `${baseToken?.name || 'UNKNOWN'}/${quoteToken?.name || 'UNKNOWN'}`
                 };
             });
+            await this.redis.setEx(cacheKey, config.monitor.cacheTTLMs / 1000, JSON.stringify(coints));
+            return coints;
         } catch (error) {
             logger.error(`Failed to fetch spot coins: ${error}`);
             return [];

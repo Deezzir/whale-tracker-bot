@@ -7,7 +7,8 @@ const logger = new Logger('health');
 const HEALTH_ENDPOINT = '/healthz';
 
 class HealthService {
-    private static readonly THRESHOLD = 3;
+    private static readonly NO_DATA_CNT_THRESHOLD = 3;
+    private static readonly SCAN_STALL_CNT_THRESHOLD = 2;
 
     private trackers: Tracker[];
     private port: number;
@@ -38,7 +39,10 @@ class HealthService {
     }
 
     private getStatuses() {
-        return this.trackers.map((t) => ({ name: t.name, ok: t.isHealthy(HealthService.THRESHOLD) }));
+        return this.trackers.map((t) => ({
+            name: t.name,
+            ok: t.isHealthy(HealthService.NO_DATA_CNT_THRESHOLD, HealthService.SCAN_STALL_CNT_THRESHOLD)
+        }));
     }
 
     private checkHealth() {

@@ -2,8 +2,8 @@ import { InlineKeyboardMarkup } from 'telegraf/types';
 import { Tracker } from '../../common/tracker';
 import { config } from '../../config';
 import PolymarketAPIService, { Trade } from '../api/polymarket';
-import PolymarketDBService, { PolyAggregationRecord, PolyTrade, PositionKey } from '../db/polymarket';
-import { escapeHtml, formatCurrency, formatDate, sleep } from '../../common/utils';
+import PolymarketDBService, { PolyAggregationRecord, PolyTradeInput, PositionKey } from '../db/polymarket';
+import { escapeHtml, formatCurrency, formatDate, sleep, withTimeout } from '../../common/utils';
 
 type MarketCategory = 'sport' | 'esports' | 'regular';
 type AccountTag = 'FRESH' | 'DORMANT' | 'SMALL' | 'MEDIUM' | 'LARGE';
@@ -83,7 +83,7 @@ function isEsportsMarket(title: string): boolean {
 export default class PolymarketService extends Tracker {
     private api = new PolymarketAPIService();
     private static readonly CONNECT_TIMEOUT_MS = 15_000;
-    private tradeBatch: PolyTrade[] = [];
+    private tradeBatch: PolyTradeInput[] = [];
     private batchInterval: NodeJS.Timeout | null = null;
     private pingInterval: NodeJS.Timeout | null = null;
     private connectTimeout: NodeJS.Timeout | null = null;
@@ -136,6 +136,7 @@ export default class PolymarketService extends Tracker {
             while (this.monitoring) {
                 try {
                     await PolymarketDBService.cleanTrades(config.polymarket.cleanupTTLms);
+                    await PolymarketDBService.cleanAlerts(config.polymarket.cleanupTTLms);
                 } catch (error) {
                     this.logger.error(`Failed to cleanup: ${error}`);
                 }
@@ -149,7 +150,9 @@ export default class PolymarketService extends Tracker {
             this.reconnectWebSocket();
         });
 
-        await Promise.all([scanLoop(), cleanupLoop(), watchDog]);
+        const scanWatchDog = this.scanWatchDog(config.monitor.scanStallTimeoutMs);
+
+        await Promise.all([scanLoop(), cleanupLoop(), watchDog, scanWatchDog]);
     }
 
     private async backfill() {
@@ -162,8 +165,11 @@ export default class PolymarketService extends Tracker {
     }
 
     private async scanAndAlert(): Promise<void> {
+        const CANDIDATE_TIMEOUT_MS = 20_000;
+
         if (this.affectedKeys.size === 0) {
             this.logger.info('No affected positions to scan');
+            this.lastScanTimestamp = Date.now();
             return;
         }
 
@@ -174,17 +180,22 @@ export default class PolymarketService extends Tracker {
             keysToScan,
             config.polymarket.alertThresholdUsd,
             config.polymarket.sportAlertThresholdUsd,
-            config.polymarket.cleanupTTLms
+            config.polymarket.aggregationWindowMs
         );
 
         this.logger.info(`Found ${candidates.length} candidates needing alert`);
         for (const candidate of candidates) {
             try {
-                await this.processAlertCandidate(candidate);
+                await withTimeout(
+                    this.processAlertCandidate(candidate),
+                    CANDIDATE_TIMEOUT_MS,
+                    `processAlertCandidate(${candidate.wallet}/${candidate.conditionId})`
+                );
             } catch (error) {
                 this.logger.error(`Failed to alert wallet ${candidate.wallet} / ${candidate.conditionId}: ${error}`);
             }
         }
+        this.lastScanTimestamp = Date.now();
     }
 
     private async processAlertCandidate(candidate: PolyAggregationRecord): Promise<void> {
@@ -385,7 +396,7 @@ export default class PolymarketService extends Tracker {
 
             try {
                 this.logger.info(`Flushing trade batch of size ${batchToFlush.length}`);
-                await PolymarketDBService.addTradesBulk(batchToFlush);
+                await PolymarketDBService.addTradesBulk(batchToFlush, config.polymarket.aggregationWindowMs);
                 for (const trade of batchToFlush) {
                     const keyStr = `${trade.proxyWallet}:${trade.conditionId}:${trade.outcomeIndex}`;
                     if (!this.affectedKeys.has(keyStr)) {
@@ -466,21 +477,19 @@ export default class PolymarketService extends Tracker {
         return lines.join('\n');
     }
 
-    private transformTrade(raw: Trade): PolyTrade | null {
+    private transformTrade(raw: Trade): PolyTradeInput | null {
+        const MIN_TRADE_USD = 50;
         const price = raw.price;
         const size = raw.size;
         const usdAmount = size * price;
 
         if (price >= config.polymarket.maxPriceFilter) return null;
-        if (usdAmount < config.polymarket.minTradeUSD) return null;
+        if (usdAmount < MIN_TRADE_USD) return null;
 
         return {
-            transactionHash: raw.transactionHash,
-            asset: raw.asset,
             proxyWallet: raw.proxyWallet,
             conditionId: raw.conditionId,
             side: raw.side,
-            size,
             price,
             usdAmount,
             outcome: raw.outcome,

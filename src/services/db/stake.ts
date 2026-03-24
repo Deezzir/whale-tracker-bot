@@ -109,7 +109,9 @@ export default class StakeDBService {
                 }
             }));
 
+            const start = performance.now();
             const result = await StakeBetModel.bulkWrite(bulkOps, { ordered: false });
+            logger.debug(`addStakeBetsBulk: ${bulkOps.length} ops in ${(performance.now() - start).toFixed(1)}ms`);
             return result.ok === 1;
         } catch (error) {
             logger.error(`Error adding stake bet records batch: ${error}`);
@@ -135,6 +137,7 @@ export default class StakeDBService {
 
     static async getStakeBetsToAlert(threshold: number, ageMs: number): Promise<StakeBetRecord[]> {
         try {
+            const start = performance.now();
             const docs = await StakeBetModel.find(
                 {
                     amountUSD: { $gte: threshold },
@@ -152,6 +155,7 @@ export default class StakeDBService {
             )
                 .lean()
                 .exec();
+            logger.debug(`getStakeBetsToAlert: ${docs.length} results in ${(performance.now() - start).toFixed(1)}ms`);
 
             return docs.map((doc) => ({
                 id: String(doc._id),

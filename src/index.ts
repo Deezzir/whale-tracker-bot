@@ -20,20 +20,13 @@ const hl = new HyperliquidService(
     [{ chatId: config.telegram.chatID, topicId: config.telegram.hsOtherSpotTopicID }],
     [{ chatId: config.telegram.chatID, topicId: config.telegram.trackTopicID }]
 );
-const stake = new StakeService(
-    telegram,
-    [{ chatId: config.telegram.chatID, topicId: config.telegram.stakeTopicID }],
-    false,
-    true
-);
+const stake = new StakeService(telegram, [{ chatId: config.telegram.chatID, topicId: config.telegram.stakeTopicID }]);
 const poly = new PolymarketService(telegram, [
     { chatId: config.telegram.chatID, topicId: config.telegram.polyTopicID },
     { chatId: -1003468238602, topicId: 10961 }
 ]);
 const services: Tracker[] = [hl, stake, poly];
 const healthServer = new HealthService(config.healthServerPort, services);
-
-let keepAlive: NodeJS.Timeout;
 
 async function extractTrackData(
     ctx: (Context & { match: RegExpMatchArray | null }) | (Context & { args: string[] }),
@@ -166,7 +159,6 @@ async function stopMonitoringServices(): Promise<void> {
 async function shutdown(code: number): Promise<void> {
     logger.info('Shutting down...');
     try {
-        if (keepAlive) clearInterval(keepAlive);
         healthServer.stop();
         telegram.stop();
         await Promise.allSettled([closeDB(), closeRedis(), stopMonitoringServices()]);
@@ -190,14 +182,12 @@ async function main(): Promise<void> {
         }
     );
 
-    logger.info('Starting monitoring services.');
+    logger.info('Starting monitoring services...');
     startMonitoringServices();
     healthServer.start(async (error?: string) => {
         telegram.sendRestarUnhealthyAlert(error).catch((err) => logger.error(`Failed to send unhealthy alert: ${err}`));
         shutdown(1);
     });
-
-    keepAlive = setInterval(() => {}, 60_000);
 
     process.once('SIGINT', () => void shutdown(0));
     process.once('SIGTERM', () => void shutdown(0));
