@@ -20,12 +20,7 @@ const hl = new HyperliquidService(
     [{ chatId: config.telegram.chatID, topicId: config.telegram.hsOtherSpotTopicID }],
     [{ chatId: config.telegram.chatID, topicId: config.telegram.trackTopicID }]
 );
-const stake = new StakeService(
-    telegram,
-    [{ chatId: config.telegram.chatID, topicId: config.telegram.stakeTopicID }],
-    false,
-    true
-);
+const stake = new StakeService(telegram, [{ chatId: config.telegram.chatID, topicId: config.telegram.stakeTopicID }]);
 const poly = new PolymarketService(telegram, [
     { chatId: config.telegram.chatID, topicId: config.telegram.polyTopicID },
     { chatId: -1003468238602, topicId: 10961 }

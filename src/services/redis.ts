@@ -20,7 +20,7 @@ export async function connectRedis() {
             process.exit(1);
         });
         await redis.connect();
-        logger.info('Connected to Redis');
+        // logger.info('Connected to Redis');
     } catch (error) {
         logger.error(`Redis connection error: ${error}`);
         process.exit(1);

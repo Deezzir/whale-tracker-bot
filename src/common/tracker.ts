@@ -1,5 +1,4 @@
 import Tg from '../services/telegram';
-import { getRedisClient } from '../services/redis';
 import Logger from './logger';
 import { sleep } from './utils';
 import { Mutex } from './mutex';
@@ -19,7 +18,6 @@ export abstract class Tracker {
     protected tg: Tg;
     protected channels: ChatChannel[];
 
-    protected redis = getRedisClient();
     protected monitoring = false;
     protected flushMutex = new Mutex();
     protected monitorTask?: Promise<void>;

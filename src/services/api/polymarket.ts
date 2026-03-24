@@ -69,10 +69,11 @@ const MAX_OFFSET = 3000;
 export default class PolymarketAPIService {
     private gammaLimiter = new RateLimiter(config.polymarket.gammaApiRateLimit);
     private dataLimiter = new RateLimiter(config.polymarket.dataApiRateLimit);
+    private redis = getRedisClient();
+
     private marketCacheKey = (slug: string) => `gamma:market:${slug}`;
     private walletCacheKey = (proxyWallet: string) => `gamma:wallet:${proxyWallet}`;
     private walletStatsCacheKey = (proxyWallet: string) => `gamma:wallet-stats:${proxyWallet}`;
-    private redis = getRedisClient();
 
     public async getMarketBySlug(slug: string): Promise<Market | null> {
         const cached = await this.redis.get(this.marketCacheKey(slug));

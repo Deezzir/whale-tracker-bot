@@ -124,6 +124,18 @@ export default class PolymarketDBService {
         }
     }
 
+    static async cleanAlerts(ttlMs: number): Promise<number> {
+        try {
+            const cutoff = new Date(Date.now() - ttlMs);
+            const result = await PolyAlertModel.deleteMany({ sentAt: { $lt: cutoff } });
+            logger.info(`Deleted ${result.deletedCount} old alert records`);
+            return result.deletedCount;
+        } catch (error) {
+            logger.error(`Error cleaning alerts: ${error}`);
+            throw error;
+        }
+    }
+
     static async getTradesToAlert(
         keysToScan: PositionKey[],
         threshold: number,

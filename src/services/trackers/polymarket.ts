@@ -136,6 +136,7 @@ export default class PolymarketService extends Tracker {
             while (this.monitoring) {
                 try {
                     await PolymarketDBService.cleanTrades(config.polymarket.cleanupTTLms);
+                    await PolymarketDBService.cleanAlerts(config.polymarket.cleanupTTLms);
                 } catch (error) {
                     this.logger.error(`Failed to cleanup: ${error}`);
                 }
@@ -467,12 +468,13 @@ export default class PolymarketService extends Tracker {
     }
 
     private transformTrade(raw: Trade): PolyTrade | null {
+        const MIN_TRADE_USD = 50;
         const price = raw.price;
         const size = raw.size;
         const usdAmount = size * price;
 
         if (price >= config.polymarket.maxPriceFilter) return null;
-        if (usdAmount < config.polymarket.minTradeUSD) return null;
+        if (usdAmount < MIN_TRADE_USD) return null;
 
         return {
             transactionHash: raw.transactionHash,

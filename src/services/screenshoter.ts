@@ -4,6 +4,7 @@ import Logger from '../common/logger';
 import { Browser } from 'puppeteer';
 import ProxyService, { Proxy } from './proxies';
 import { sleep } from 'bun';
+import { retry } from '../common/retrier';
 
 const logger = new Logger('Screenshoter');
 puppeteer.use(StealthPlugin());
@@ -27,16 +28,14 @@ export default class ScreenshotService {
             '--disable-dev-shm-usage'
         ];
         if (this.proxy) args.push(`--proxy-server=http://${this.proxy.host}:${this.proxy.port}`);
-
         this.browser = await puppeteer.launch({
             headless: true,
             args
         });
 
         logger.info(
-            `Puppeteer launched with${this.proxy ? ` proxy ${this.proxy.host}:${this.proxy.port}` : 'out proxy'}`
+            `Puppeteer initialized with${this.proxy ? ` proxy ${this.proxy.host}:${this.proxy.port}` : 'out proxy'}`
         );
-        logger.info('Puppeteer initialized');
     }
 
     async stop(): Promise<void> {
@@ -47,6 +46,11 @@ export default class ScreenshotService {
     }
 
     async capture(url: string, selector?: string, waitFn?: () => boolean): Promise<Buffer | null> {
+        const MAX_RETRIES = 3;
+        return retry(() => this.captureInternal(url, selector, waitFn), { attempts: MAX_RETRIES }, logger);
+    }
+
+    private async captureInternal(url: string, selector?: string, waitFn?: () => boolean): Promise<Buffer | null> {
         try {
             if (!this.browser) await this.start();
 
@@ -56,6 +60,14 @@ export default class ScreenshotService {
                     username: this.proxy.username,
                     password: this.proxy.password
                 });
+            page.on('framenavigated', async (frame) => {
+                if (
+                    frame === page.mainFrame() &&
+                    (page.url().includes('restrictedRegion') || page.url().includes('restricted'))
+                ) {
+                    await page.goBack();
+                }
+            });
 
             try {
                 await page.setViewport({ width: 1280, height: 1400 });
@@ -70,11 +82,13 @@ export default class ScreenshotService {
 
                 if (waitFn) {
                     await page.waitForFunction(waitFn, { timeout: 15_000, polling: 1000 });
+                    await sleep(1000);
                 }
 
                 if (selector) {
                     const element = await page.waitForSelector(selector, { timeout: 10_000 });
                     if (!element) throw new Error(`Element not found: ${selector}`);
+                    await sleep(1000);
                     const screenshot = await element.screenshot({ type: 'png' });
                     return Buffer.from(screenshot);
                 }

@@ -358,11 +358,34 @@ export default class HyperliquidDBService {
         }
     }
 
+    static async updateTradeNotional(id: string, newNotional: number): Promise<void> {
+        try {
+            await HyperAggregationModel.updateOne(
+                { _id: new mongoose.Types.ObjectId(id) },
+                { $set: { totalNotional: newNotional } }
+            ).exec();
+        } catch (error) {
+            logger.error(`Error updating notional for trade ${id}: ${error}`);
+            throw error;
+        }
+    }
+
     static async cleanTrades(ttlMs: number): Promise<void> {
         try {
             const cutoffDate = new Date(Date.now() - ttlMs).toISOString();
             const result = await HyperAggregationModel.deleteMany({ updatedAt: { $lt: cutoffDate } });
             logger.info(`Deleted ${result.deletedCount} old records`);
+        } catch (error) {
+            logger.error(`${error}`);
+            throw error;
+        }
+    }
+
+    static async cleanAlerts(ttlMs: number): Promise<void> {
+        try {
+            const cutoffDate = new Date(Date.now() - ttlMs).toISOString();
+            const result = await HyperAlertModel.deleteMany({ sentAt: { $lt: cutoffDate } });
+            logger.info(`Deleted ${result.deletedCount} old alert records`);
         } catch (error) {
             logger.error(`${error}`);
             throw error;

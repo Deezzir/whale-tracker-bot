@@ -15,6 +15,7 @@ import { capitalize, formatCurrency, sleep } from '../../common/utils';
 import puppeteer from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import ProxyService, { Proxy } from '../proxies';
+import { getRedisClient } from '../redis';
 
 interface Payload {
     type: string;
@@ -165,7 +166,6 @@ export default class StakeService extends Tracker {
     private url = config.stake.url;
     private proxy: Proxy | null = this.useProxy ? ProxyService.getRandomProxy() : null;
 
-    private stakeCurrenciesKey = 'stake:currencies';
     private page: Page | null = null;
     private browser: Browser | null = null;
     private betsBatch: Partial<StakeBetDocument>[] = [];
@@ -408,7 +408,10 @@ export default class StakeService extends Tracker {
     }
 
     private async fetchCurrencies(): Promise<Map<string, number>> {
-        const cached = await this.redis.get(this.stakeCurrenciesKey);
+        const stakeCurrenciesKey = 'stake:currencies';
+        const redis = getRedisClient();
+
+        const cached = await redis.get(stakeCurrenciesKey);
         if (cached) return new Map(JSON.parse(cached));
 
         if (!this.page) throw new Error('Puppeteer page is not initialized');
@@ -442,7 +445,7 @@ export default class StakeService extends Tracker {
             if (!usd) continue;
             rateMap.set(currency.name, usd.rate);
         }
-        await this.redis.setEx(this.stakeCurrenciesKey, config.monitor.cacheTTLMs / 1000, JSON.stringify([...rateMap]));
+        await redis.setEx(stakeCurrenciesKey, config.monitor.cacheTTLMs / 1000, JSON.stringify([...rateMap]));
         return rateMap;
     }
 
@@ -605,6 +608,8 @@ export default class StakeService extends Tracker {
     }
 
     private async handleMessage(message: any): Promise<void> {
+        const MIN_BET_USD = 1_000;
+
         try {
             const parsed = JSON.parse(message);
             if (parsed.type === 'log') {
@@ -618,7 +623,6 @@ export default class StakeService extends Tracker {
             if (parsed.type !== 'next') return;
 
             const betData = parsed.payload?.data?.allSportBets || parsed.payload?.data?.highrollerSportBets;
-            const source = parsed.payload?.data?.allSportBets ? 'AllSportBets' : 'HighrollerSportBets';
             if (!betData?.bet) return;
 
             const betRaw = betData.bet;
@@ -694,6 +698,9 @@ export default class StakeService extends Tracker {
                 if (!rate) return 0;
                 return betRaw.amount * rate;
             })();
+
+            if (amountUSD < MIN_BET_USD) return;
+
             await this.handleBet({
                 type: betRaw.__typename,
                 potentialMultiplier: betRaw.potentialMultiplier ?? betRaw.betPotentialMultiplier ?? null,
@@ -701,10 +708,6 @@ export default class StakeService extends Tracker {
                 iid: betData.iid,
                 outcomes
             });
-            if (amountUSD >= 1000)
-                this.logger.debug(
-                    `Detected high-value bet: IID ${betData.iid} ${formatCurrency(amountUSD)} (${source})`
-                );
         } catch (err) {
             this.logger.error(`Error parsing message: ${err}`);
         }
