@@ -173,45 +173,51 @@ export default class StakeService extends Tracker {
     private reconnecting = false;
 
     async start(): Promise<void> {
-        if (this.monitoring) return;
-        this.monitoring = true;
+        if (this.running) return;
+        this.running = true;
         this.logger.info('StakeServivce monitoring started');
 
         try {
             this.browser = await this.initBrowser();
             this.page = await this.initPage(this.browser);
             await sleep(5000);
-            this.setupPageEventHandlers(this.page);
+            await this.setupPageEventHandlers(this.page);
             this.logger.info(
                 `Puppeteer initialized with${this.proxy ? ` proxy ${this.proxy.host}:${this.proxy.port}` : 'out proxy'}`
             );
+
+            this.betsBatchInterval = setInterval(() => {
+                this.flushBetsBatch().catch((error) => this.logger.error(`Error flushing bets batch: ${error}`));
+            }, config.stake.batchFlushIntervalMs);
+
+            await this.subscribeBets();
+            this.monitorTask = this.mainLoop();
         } catch (error) {
-            this.monitoring = false;
-            this.page = null;
+            this.running = false;
+            this.clearBatchInterval();
+            await this.disposePuppeteer();
             this.logger.error(`Error initializing Puppeteer: ${error}`);
-            for (const ch of this.channels) this.tg.sendMessage(ch.chatId, 'Unable to start stake monitoring.');
-            return;
+            for (const ch of this.channels) {
+                await this.tg.sendMessage(ch.chatId, 'Unable to start stake monitoring.').catch(() => {});
+            }
         }
-
-        this.betsBatchInterval = setInterval(() => {
-            this.flushBetsBatch().catch((error) => this.logger.error(`Error flushing bets batch: ${error}`));
-        }, config.stake.batchFlushIntervalMs);
-
-        await this.subscribeBets();
-        this.monitorTask = this.mainLoop();
     }
 
     async stop(): Promise<void> {
-        if (!this.monitoring) return;
-        this.monitoring = false;
-        await this.monitorTask?.catch((error) => this.logger.error(`Error while awaiting monitor task: ${error}`));
-        this.monitorTask = undefined;
-        this.logger.info('Monitoring stopped');
-        if (this.page) this.page.close().catch(() => { });
-        if (this.browser) this.browser.close().catch(() => { });
-        if (this.betsBatchInterval) clearInterval(this.betsBatchInterval);
-        this.page = null;
-        this.browser = null;
+        if (this.running) {
+            this.running = false;
+            await this.monitorTask?.catch((error) => this.logger.error(`Error while awaiting monitor task: ${error}`));
+            this.monitorTask = undefined;
+            this.logger.info('Monitoring stopped');
+        }
+
+        this.clearBatchInterval();
+        await this.flushBetsBatch().catch((error) =>
+            this.logger.error(`Error flushing bets batch during stop: ${error}`)
+        );
+        this.betsBatch = [];
+
+        await Promise.allSettled([this.disposePuppeteer(), this.screenshoter.stop()]);
     }
 
     private get browserArgs(): string[] {
@@ -219,11 +225,39 @@ export default class StakeService extends Tracker {
             '--no-sandbox',
             '--disable-setuid-sandbox',
             '--disable-blink-features=AutomationControlled',
-            '--display=:0',
-            '--disable-dev-shm-usage'
+            '--disable-dev-shm-usage',
+            '--disable-gpu',
+            '--disable-software-rasterizer',
+            '--disable-background-networking',
+            '--disable-default-apps',
+            '--disable-extensions',
+            '--disable-sync',
+            '--mute-audio',
+            '--no-first-run',
+            '--no-default-browser-check',
+            '--no-zygote'
         ];
+        if (!config.puppeteer.headless) args.push('--display=:0');
         if (this.proxy) args.push(`--proxy-server=http://${this.proxy.host}:${this.proxy.port}`);
         return args;
+    }
+
+    private clearBatchInterval(): void {
+        if (!this.betsBatchInterval) return;
+        clearInterval(this.betsBatchInterval);
+        this.betsBatchInterval = undefined;
+    }
+
+    private async disposePuppeteer(): Promise<void> {
+        const page = this.page;
+        const browser = this.browser;
+        this.page = null;
+        this.browser = null;
+
+        const closeOps: Promise<unknown>[] = [];
+        if (page) closeOps.push(page.close());
+        if (browser) closeOps.push(browser.close());
+        if (closeOps.length > 0) await Promise.allSettled(closeOps);
     }
 
     private async initBrowser(): Promise<Browser> {
@@ -254,25 +288,25 @@ export default class StakeService extends Tracker {
 
     private async mainLoop(): Promise<void> {
         const scanLoop = async () => {
-            while (this.monitoring) {
+            while (this.running) {
                 try {
                     await this.scanAndAlert();
                 } catch (error) {
                     this.logger.error(`Error in scanAndAlert: ${error}`);
                 }
-                if (!this.monitoring) break;
+                if (!this.running) break;
                 await this.cancellableSleep(config.monitor.intervalMs);
             }
         };
 
         const cleanupLoop = async () => {
-            while (this.monitoring) {
+            while (this.running) {
                 try {
                     await DBService.cleanBets(config.stake.cleanupTTLms);
                 } catch (error) {
                     this.logger.error(`TradeService.mainLoop cleanup: ${error}`);
                 }
-                if (!this.monitoring) break;
+                if (!this.running) break;
                 await this.cancellableSleep(config.monitor.cleanupIntervalMs);
             }
         };
@@ -462,30 +496,23 @@ export default class StakeService extends Tracker {
     }
 
     private async reconnectPage(): Promise<void> {
-        if (!this.monitoring || this.reconnecting) return;
-        if (!this.browser) throw new Error('Browser not initialized');
+        if (!this.running || this.reconnecting) return;
         this.reconnecting = true;
         this.logger.info('Reinitializing Puppeteer due to WebSocket disconnect...');
 
         try {
-            if (this.page) {
-                await this.page.close().catch(() => { });
-                this.page = null;
-            }
-            if (this.browser) {
-                await this.browser.close().catch(() => { });
-                this.browser = null;
-            }
+            await this.disposePuppeteer();
 
             this.browser = await this.initBrowser();
             this.page = await this.initPage(this.browser);
             await sleep(5000);
-            this.setupPageEventHandlers(this.page);
+            await this.setupPageEventHandlers(this.page);
             this.logger.info('Puppeteer reinitialized successfully');
 
             await this.subscribeBets();
         } catch (error) {
             this.logger.error(`Error recreating page: ${error}`);
+            await this.disposePuppeteer();
         } finally {
             this.reconnecting = false;
         }
@@ -520,7 +547,7 @@ export default class StakeService extends Tracker {
                     if (manager[wsKey]) {
                         try {
                             manager[wsKey].close();
-                        } catch { }
+                        } catch {}
                         manager[wsKey] = null;
                     }
                     if (manager[intervalKey]) {

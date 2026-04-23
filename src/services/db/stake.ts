@@ -68,17 +68,20 @@ const StakeBetSchema = new Schema<StakeBetDocument>(
         amountUSD: { type: Number, required: true },
         outcomes: { type: [Schema.Types.Mixed], required: true } as any,
         iid: { type: String, required: true, unique: true },
-        lastAlertedAt: { type: Number }
+        lastAlertedAt: { type: Number, default: null }
     },
     { timestamps: true }
 );
+
+StakeBetSchema.index({ lastAlertedAt: 1, createdAt: -1, amountUSD: -1 });
+StakeBetSchema.index({ updatedAt: 1 });
 
 const StakeBetModel = mongoose.models.StakeBetRecord || mongoose.model<StakeBetDocument>('StakeBet', StakeBetSchema);
 
 export default class StakeDBService {
     static async cleanBets(ttlMs: number): Promise<void> {
         try {
-            const cutoffDate = new Date(Date.now() - ttlMs).toISOString();
+            const cutoffDate = new Date(Date.now() - ttlMs);
             const result = await StakeBetModel.deleteMany({ updatedAt: { $lt: cutoffDate } });
             logger.info(`Deleted ${result.deletedCount} old records`);
         } catch (error) {
@@ -142,7 +145,7 @@ export default class StakeDBService {
                 {
                     amountUSD: { $gte: threshold },
                     createdAt: { $gte: new Date(Date.now() - ageMs) },
-                    $or: [{ lastAlertedAt: { $exists: false } }, { lastAlertedAt: null }]
+                    lastAlertedAt: null
                 },
                 {
                     iid: 1,

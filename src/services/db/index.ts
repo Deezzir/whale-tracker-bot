@@ -11,12 +11,25 @@ function getDBName() {
     return config.env === Environment.Development ? config.db.dbName + '-dev' : config.db.dbName;
 }
 
+async function ensureIndexesOnStartup(): Promise<void> {
+    const modelNames = mongoose.modelNames();
+    if (modelNames.length === 0) return;
+
+    const start = performance.now();
+    await Promise.all(modelNames.map((modelName) => mongoose.model(modelName).createIndexes()));
+    logger.info(`Ensured indexes for ${modelNames.length} models in ${(performance.now() - start).toFixed(1)}ms`);
+}
+
 async function connectDB() {
     try {
         await mongoose.connect(config.db.mongodbURI, {
             dbName: getDBName(),
-            autoIndex: config.env !== Environment.Production
+            autoIndex: config.db.autoIndex
         });
+
+        if (config.db.ensureIndexesOnStart) {
+            await ensureIndexesOnStartup();
+        }
 
         logger.info(`MongoDB Connected: ${mongoose.connection.host}:${mongoose.connection.port}`);
     } catch (error) {

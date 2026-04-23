@@ -18,7 +18,7 @@ export abstract class Tracker {
     protected tg: Tg;
     protected channels: ChatChannel[];
 
-    protected monitoring = false;
+    protected running = false;
     protected flushMutex = new Mutex();
     protected monitorTask?: Promise<void>;
 
@@ -39,18 +39,18 @@ export abstract class Tracker {
     abstract stop(): Promise<void>;
 
     isActive(): boolean {
-        return this.monitoring;
+        return this.running;
     }
 
     isHealthy(noDataCntThreshold: number, scanStallCntThreshold = noDataCntThreshold): boolean {
-        return this.monitoring && this.restartCount < noDataCntThreshold && this.scanStallCount < scanStallCntThreshold;
+        return this.running && this.restartCount < noDataCntThreshold && this.scanStallCount < scanStallCntThreshold;
     }
 
     protected async watchDog(timeoutMs: number, recover?: () => Promise<void>): Promise<void> {
         const checkInterval = Math.min(Math.floor(timeoutMs / 3), 60_000);
         let lastCheckedTimestamp = this.lastDataTimestamp;
 
-        while (this.monitoring) {
+        while (this.running) {
             try {
                 const now = Date.now();
                 if (now - this.lastDataTimestamp >= timeoutMs) {
@@ -67,7 +67,7 @@ export abstract class Tracker {
             } catch (err) {
                 this.logger.error(`Error in alertNoData: ${err}`);
             }
-            if (!this.monitoring) break;
+            if (!this.running) break;
             await this.cancellableSleep(checkInterval);
         }
     }
@@ -75,7 +75,7 @@ export abstract class Tracker {
     protected async scanWatchDog(timeoutMs: number): Promise<void> {
         const checkInterval = Math.min(Math.floor(timeoutMs / 3), 60_000);
 
-        while (this.monitoring) {
+        while (this.running) {
             try {
                 const elapsed = Date.now() - this.lastScanTimestamp;
                 if (elapsed >= timeoutMs) {
@@ -90,7 +90,7 @@ export abstract class Tracker {
             } catch (err) {
                 this.logger.error(`Error in scanWatchDog: ${err}`);
             }
-            if (!this.monitoring) break;
+            if (!this.running) break;
             await this.cancellableSleep(checkInterval);
         }
     }
@@ -101,13 +101,13 @@ export abstract class Tracker {
         const remainder = ms % checkInterval;
 
         for (let i = 0; i < iterations; i++) {
-            if (!this.monitoring) {
+            if (!this.running) {
                 this.logger.info('cancellableSleep: sleep interrupted by stop request.');
                 return;
             }
             await sleep(checkInterval);
         }
 
-        if (remainder > 0 && this.monitoring) await sleep(remainder);
+        if (remainder > 0 && this.running) await sleep(remainder);
     }
 }

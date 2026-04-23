@@ -119,8 +119,8 @@ export default class HyperliquidService extends Tracker {
     }
 
     async start(): Promise<void> {
-        if (this.monitoring) return;
-        this.monitoring = true;
+        if (this.running) return;
+        this.running = true;
         this.logger.info('Monitoring started');
 
         const perpNames = await this.api.fetchCoins();
@@ -150,15 +150,24 @@ export default class HyperliquidService extends Tracker {
     }
 
     async stop(): Promise<void> {
-        if (!this.monitoring) return;
-        this.monitoring = false;
-        await this.monitorTask?.catch((error) => this.logger.error(`Error while awaiting monitor task: ${error}`));
-        this.monitorTask = undefined;
-        this.logger.info('Monitoring stopped');
+        if (this.running) {
+            this.running = false;
+            await this.monitorTask?.catch((error) => this.logger.error(`Error while awaiting monitor task: ${error}`));
+            this.monitorTask = undefined;
+            this.logger.info('Monitoring stopped');
+        }
 
         this.affectedKeys.clear();
         this.spotCoinMap.clear();
-        this.flushTradeBatch().catch((error) => this.logger.error(`Error flushing trade batch during stop: ${error}`));
+        if (this.batchInterval) {
+            clearInterval(this.batchInterval);
+            this.batchInterval = undefined;
+        }
+
+        await this.flushTradeBatch().catch((error) =>
+            this.logger.error(`Error flushing trade batch during stop: ${error}`)
+        );
+        this.tradeBatch = [];
 
         for (const slot of this.sockets) {
             if (slot.pingInterval) {
@@ -173,7 +182,8 @@ export default class HyperliquidService extends Tracker {
             }
         }
         this.sockets = [];
-        if (this.batchInterval) clearInterval(this.batchInterval);
+
+        await this.screenshoter.stop();
     }
 
     async track(wallet: string, coin: string, direction: HyperTradeDirection): Promise<string> {
@@ -311,38 +321,38 @@ export default class HyperliquidService extends Tracker {
 
     private async mainLoop(): Promise<void> {
         const scanLoop = async () => {
-            while (this.monitoring) {
+            while (this.running) {
                 try {
                     await this.scanAndAlert();
                 } catch (error) {
                     this.logger.error(`Failed to alert: ${error}`);
                 }
-                if (!this.monitoring) break;
+                if (!this.running) break;
                 await this.cancellableSleep(config.monitor.intervalMs);
             }
         };
 
         const cleanupLoop = async () => {
-            while (this.monitoring) {
+            while (this.running) {
                 try {
                     await HyperliquidDBService.cleanTrades(config.hyperliquid.cleanupTTLms);
                     await HyperliquidDBService.cleanAlerts(config.hyperliquid.cleanupTTLms);
                 } catch (error) {
                     this.logger.error(`Failed to cleanup: ${error}`);
                 }
-                if (!this.monitoring) break;
+                if (!this.running) break;
                 await this.cancellableSleep(config.monitor.cleanupIntervalMs);
             }
         };
 
         const trackLoop = async () => {
-            while (this.monitoring) {
+            while (this.running) {
                 try {
                     await this.trackAndAlert();
                 } catch (error) {
                     this.logger.error(`Failed to track:${error}`);
                 }
-                if (!this.monitoring) break;
+                if (!this.running) break;
                 await this.cancellableSleep(config.hyperliquid.checkIntervalMs);
             }
         };
@@ -545,10 +555,10 @@ export default class HyperliquidService extends Tracker {
             slot.ws = null;
         }
 
-        if (this.monitoring) {
+        if (this.running) {
             setTimeout(() => {
                 slot.reconnecting = false;
-                if (this.monitoring) {
+                if (this.running) {
                     slot.ws = this.connectWebSocket(slot);
                 }
             }, 5000);

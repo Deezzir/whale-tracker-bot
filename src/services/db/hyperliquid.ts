@@ -34,6 +34,8 @@ const HyperAggregationSchema = new Schema<HyperAggregationDocument>(
 );
 
 HyperAggregationSchema.index({ wallet: 1, coin: 1, dateKey: 1, direction: 1 }, { unique: true });
+HyperAggregationSchema.index({ dateKey: 1, totalNotional: -1 });
+HyperAggregationSchema.index({ updatedAt: 1 });
 
 const HyperAggregationModel =
     mongoose.models.WalletAggregation ||
@@ -66,6 +68,7 @@ const HyperTrackedSchema = new Schema<HyperTrackedDocument>(
 );
 
 HyperTrackedSchema.index({ wallet: 1, coin: 1, direction: 1 }, { unique: true });
+HyperTrackedSchema.index({ nextCheckAt: 1 });
 
 const HyperTrackedModel =
     mongoose.models.WalletTracking || mongoose.model<HyperTrackedDocument>('HyperTrack', HyperTrackedSchema);
@@ -96,6 +99,8 @@ const HyperAlertSchema = new Schema<HyperAlertDocument>(
 );
 
 HyperAlertSchema.index({ wallet: 1, coin: 1, direction: 1, chatId: 1 });
+HyperAlertSchema.index({ wallet: 1, coin: 1, direction: 1, chatId: 1, sentAt: -1 });
+HyperAlertSchema.index({ sentAt: 1 });
 
 const HyperAlertModel =
     mongoose.models.HyperAlert || mongoose.model<HyperAlertDocument>('HyperAlert', HyperAlertSchema);
@@ -190,29 +195,60 @@ export default class HyperliquidDBService {
 
     static async addTradesBulk(trades: HyperTradeRecord[], windowMs?: number): Promise<boolean> {
         try {
-            const bulkOps = trades.map((trade) => {
+            const aggregated = new Map<
+                string,
+                {
+                    filter: { wallet: string; coin: string; dateKey: string; direction: HyperTradeDirection };
+                    totalNotional: number;
+                    tradeCount: number;
+                    lastTradeTime: number;
+                }
+            >();
+
+            for (const trade of trades) {
                 const dateKey = this.formatDateKey(trade.tradeTime, windowMs);
-                return {
-                    updateOne: {
-                        filter: { wallet: trade.wallet, coin: trade.coin, dateKey, direction: trade.direction },
-                        update: {
-                            $inc: {
-                                totalNotional: trade.notional,
-                                tradeCount: 1
-                            },
-                            $set: {
-                                lastTradeTime: trade.tradeTime
-                            }
+                const key = `${trade.wallet}:${trade.coin}:${trade.direction}:${dateKey}`;
+                const existing = aggregated.get(key);
+
+                if (existing) {
+                    existing.totalNotional += trade.notional;
+                    existing.tradeCount += 1;
+                    existing.lastTradeTime = Math.max(existing.lastTradeTime, trade.tradeTime);
+                    continue;
+                }
+
+                aggregated.set(key, {
+                    filter: { wallet: trade.wallet, coin: trade.coin, dateKey, direction: trade.direction },
+                    totalNotional: trade.notional,
+                    tradeCount: 1,
+                    lastTradeTime: trade.tradeTime
+                });
+            }
+
+            const bulkOps = Array.from(aggregated.values()).map((entry) => ({
+                updateOne: {
+                    filter: entry.filter,
+                    update: {
+                        $inc: {
+                            totalNotional: entry.totalNotional,
+                            tradeCount: entry.tradeCount
                         },
-                        upsert: true,
-                        setDefaultsOnInsert: true
-                    }
-                };
-            });
+                        $set: {
+                            lastTradeTime: entry.lastTradeTime
+                        }
+                    },
+                    upsert: true,
+                    setDefaultsOnInsert: true
+                }
+            }));
+
+            if (bulkOps.length === 0) return true;
 
             const start = performance.now();
             const result = await HyperAggregationModel.bulkWrite(bulkOps, { ordered: false });
-            logger.debug(`addTradesBulk: ${bulkOps.length} ops in ${(performance.now() - start).toFixed(1)}ms`);
+            logger.debug(
+                `addTradesBulk: ${trades.length} trades aggregated to ${bulkOps.length} ops in ${(performance.now() - start).toFixed(1)}ms`
+            );
             return result.ok === 1;
         } catch (error) {
             logger.error(`Error inserting trade batch: ${error}`);
@@ -334,7 +370,7 @@ export default class HyperliquidDBService {
                 {
                     dateKey,
                     totalNotional: { $gte: threshold },
-                    $and: [{ $or: keysToScan.map((k) => ({ wallet: k.wallet, coin: k.coin, direction: k.direction })) }]
+                    $or: keysToScan.map((k) => ({ wallet: k.wallet, coin: k.coin, direction: k.direction }))
                 },
                 {
                     wallet: 1,
@@ -382,7 +418,7 @@ export default class HyperliquidDBService {
 
     static async cleanTrades(ttlMs: number): Promise<void> {
         try {
-            const cutoffDate = new Date(Date.now() - ttlMs).toISOString();
+            const cutoffDate = new Date(Date.now() - ttlMs);
             const result = await HyperAggregationModel.deleteMany({ updatedAt: { $lt: cutoffDate } });
             logger.info(`Deleted ${result.deletedCount} old records`);
         } catch (error) {
@@ -402,7 +438,7 @@ export default class HyperliquidDBService {
 
     static async cleanAlerts(ttlMs: number): Promise<void> {
         try {
-            const cutoffDate = new Date(Date.now() - ttlMs).toISOString();
+            const cutoffDate = new Date(Date.now() - ttlMs);
             const result = await HyperAlertModel.deleteMany({ sentAt: { $lt: cutoffDate } });
             logger.info(`Deleted ${result.deletedCount} old alert records`);
         } catch (error) {

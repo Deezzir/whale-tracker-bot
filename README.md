@@ -48,9 +48,12 @@ Create a `.env` file in the project root.
 | Variable | Default | Description |
 | --- | --- | --- |
 | `NODE_ENV` | `development` | Runtime environment (`development` or `production`) |
+| `LOG_LEVEL` | `INFO` | Log verbosity (`INFO`, `WARN`, `ERROR`, `DEBUG`) |
 | `LOG_FILE_ENABLED` | `false` | Write logs to `./logs/YYYY-MM-DD.log` |
 | `MONGODB_URI` | `mongodb://root:example@localhost:27017` | MongoDB connection URI |
 | `DB_NAME` | `whale-tracker-bot` | Database name (`-dev` suffix is added in development) |
+| `DB_AUTO_INDEX` | `true` in development, `false` in production | Enable Mongoose auto-indexing on connect |
+| `DB_ENSURE_INDEXES_ON_START` | `true` | Explicitly runs `createIndexes()` for all models at startup |
 | `REDIS_URL` | `redis://localhost:6379` | Redis connection URL |
 | `REDIS_PASSWORD` | `` | Redis password |
 | `HS_MIN_NOTIONAL_USD` | `250000` | Hyperliquid minimum aggregated notional alert threshold |

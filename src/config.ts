@@ -19,13 +19,14 @@ export enum Environment {
 }
 
 const ASSETS_PATH = './resources';
+const runtimeEnv = optionalEnv('NODE_ENV', 'development') as Environment;
 
 // Config
 export const config = {
-    env: optionalEnv('NODE_ENV', 'development') as Environment,
+    env: runtimeEnv,
     logFileEnabled: optionalEnv('LOG_FILE_ENABLED', 'false') === 'true',
     healthServerPort: parseInt(optionalEnv('HEALTH_SERVER_PORT', '9988'), 10),
-    logLevel: optionalEnv('LOG_LEVEL', 'DEBUG'),
+    logLevel: optionalEnv('LOG_LEVEL', 'INFO'),
     telegram: {
         botToken: requireEnv('BOT_TOKEN'),
         chatID: parseInt(requireEnv('CHAT_ID'), 10),
@@ -59,7 +60,7 @@ export const config = {
         freshWindowMs: 2 * 24 * 60 * 60 * 1000, // 2 days,
         checkIntervalMs: 30 * 60 * 1000, // 30 minutes
         batchFlushIntervalMs: 60 * 1000, // 1 minute
-        cleanupTTLms: 7 * 24 * 60 * 60 * 1000 // 7 days
+        cleanupTTLms: 3 * 24 * 60 * 60 * 1000 // 3 days
     },
     stake: {
         minAlertBetUSD: parseFloat(optionalEnv('STAKE_MIN_BET_USD', '10000')),
@@ -86,13 +87,15 @@ export const config = {
         gammaApiRateLimit: 2,
         batchSize: 50,
         batchFlushIntervalMs: 10 * 1000, // 30 seconds
-        cleanupTTLms: 7 * 24 * 60 * 60 * 1000 // 7 days
+        cleanupTTLms: 3 * 24 * 60 * 60 * 1000 // 3 days
     },
     db: {
         mongodbURI: optionalEnv('MONGODB_URI', 'mongodb://root:example@localhost:27017') as string,
         dbName: optionalEnv('DB_NAME', 'whale-tracker-bot') as string,
         redisURL: optionalEnv('REDIS_URL', 'redis://localhost:6379') as string,
-        redisPassword: optionalEnv('REDIS_PASSWORD', '') as string
+        redisPassword: optionalEnv('REDIS_PASSWORD', '') as string,
+        autoIndex: optionalEnv('DB_AUTO_INDEX', runtimeEnv !== Environment.Production ? 'true' : 'false') === 'true',
+        ensureIndexesOnStart: optionalEnv('DB_ENSURE_INDEXES_ON_START', 'true') === 'true'
     },
     puppeteer: {
         screenshotEnabled: optionalEnv('PUPPETEER_SCREENSHOT_ENABLED', 'true') === 'true',

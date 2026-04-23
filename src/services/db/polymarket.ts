@@ -55,6 +55,7 @@ const PolyAggregationSchema = new Schema<PolyAggregationDocument>(
 
 PolyAggregationSchema.index({ proxyWallet: 1, conditionId: 1, outcomeIndex: 1, dateKey: 1 }, { unique: true });
 PolyAggregationSchema.index({ dateKey: 1, netUsd: 1 });
+PolyAggregationSchema.index({ updatedAt: 1 });
 
 const PolyAggregationModel =
     mongoose.models.PolyAggregation ||
@@ -86,6 +87,8 @@ const PolyAlertSchema = new Schema<PolyAlertDocument>(
 );
 
 PolyAlertSchema.index({ proxyWallet: 1, conditionId: 1, outcomeIndex: 1, chatId: 1 });
+PolyAlertSchema.index({ proxyWallet: 1, conditionId: 1, outcomeIndex: 1, chatId: 1, sentAt: -1 });
+PolyAlertSchema.index({ sentAt: 1 });
 
 const PolyAlertModel = mongoose.models.PolyAlert || mongoose.model<PolyAlertDocument>('PolyAlert', PolyAlertSchema);
 
@@ -123,41 +126,91 @@ export default class PolymarketDBService {
     static async addTradesBulk(tradeList: PolyTradeInput[], windowMs?: number): Promise<boolean> {
         if (tradeList.length === 0) return true;
         try {
-            const bulkOps = tradeList.map((trade) => {
+            const aggregated = new Map<
+                string,
+                {
+                    filter: { proxyWallet: string; conditionId: string; outcomeIndex: number; dateKey: string };
+                    totalBuyUsd: number;
+                    totalSellUsd: number;
+                    netUsd: number;
+                    priceSum: number;
+                    tradeCount: number;
+                    firstTradeAt: Date;
+                    lastTradeAt: Date;
+                    outcome: string;
+                    title: string;
+                    slug: string;
+                }
+            >();
+
+            for (const trade of tradeList) {
                 const dateKey = this.formatDateKey(trade.timestamp.getTime(), windowMs);
+                const key = `${trade.proxyWallet}:${trade.conditionId}:${trade.outcomeIndex}:${dateKey}`;
                 const isBuy = trade.side === 'BUY';
-                return {
-                    updateOne: {
-                        filter: {
-                            proxyWallet: trade.proxyWallet,
-                            conditionId: trade.conditionId,
-                            outcomeIndex: trade.outcomeIndex,
-                            dateKey
+                const existing = aggregated.get(key);
+
+                if (existing) {
+                    existing.totalBuyUsd += isBuy ? trade.usdAmount : 0;
+                    existing.totalSellUsd += isBuy ? 0 : trade.usdAmount;
+                    existing.netUsd += isBuy ? trade.usdAmount : -trade.usdAmount;
+                    existing.priceSum += trade.price;
+                    existing.tradeCount += 1;
+                    if (trade.timestamp < existing.firstTradeAt) existing.firstTradeAt = trade.timestamp;
+                    if (trade.timestamp > existing.lastTradeAt) existing.lastTradeAt = trade.timestamp;
+                    existing.outcome = trade.outcome;
+                    existing.title = trade.title || '';
+                    existing.slug = trade.slug || '';
+                    continue;
+                }
+
+                aggregated.set(key, {
+                    filter: {
+                        proxyWallet: trade.proxyWallet,
+                        conditionId: trade.conditionId,
+                        outcomeIndex: trade.outcomeIndex,
+                        dateKey
+                    },
+                    totalBuyUsd: isBuy ? trade.usdAmount : 0,
+                    totalSellUsd: isBuy ? 0 : trade.usdAmount,
+                    netUsd: isBuy ? trade.usdAmount : -trade.usdAmount,
+                    priceSum: trade.price,
+                    tradeCount: 1,
+                    firstTradeAt: trade.timestamp,
+                    lastTradeAt: trade.timestamp,
+                    outcome: trade.outcome,
+                    title: trade.title || '',
+                    slug: trade.slug || ''
+                });
+            }
+
+            const bulkOps = Array.from(aggregated.values()).map((entry) => ({
+                updateOne: {
+                    filter: entry.filter,
+                    update: {
+                        $inc: {
+                            totalBuyUsd: entry.totalBuyUsd,
+                            totalSellUsd: entry.totalSellUsd,
+                            netUsd: entry.netUsd,
+                            priceSum: entry.priceSum,
+                            tradeCount: entry.tradeCount
                         },
-                        update: {
-                            $inc: {
-                                totalBuyUsd: isBuy ? trade.usdAmount : 0,
-                                totalSellUsd: isBuy ? 0 : trade.usdAmount,
-                                netUsd: isBuy ? trade.usdAmount : -trade.usdAmount,
-                                priceSum: trade.price,
-                                tradeCount: 1
-                            },
-                            $min: { firstTradeAt: trade.timestamp },
-                            $max: { lastTradeAt: trade.timestamp },
-                            $set: {
-                                outcome: trade.outcome,
-                                title: trade.title || '',
-                                slug: trade.slug || ''
-                            }
-                        },
-                        upsert: true
-                    }
-                };
-            });
+                        $min: { firstTradeAt: entry.firstTradeAt },
+                        $max: { lastTradeAt: entry.lastTradeAt },
+                        $set: {
+                            outcome: entry.outcome,
+                            title: entry.title,
+                            slug: entry.slug
+                        }
+                    },
+                    upsert: true
+                }
+            }));
 
             const start = performance.now();
             const result = await PolyAggregationModel.bulkWrite(bulkOps, { ordered: false });
-            logger.debug(`addTradesBulk: ${bulkOps.length} ops in ${(performance.now() - start).toFixed(1)}ms`);
+            logger.debug(
+                `addTradesBulk: ${tradeList.length} trades aggregated to ${bulkOps.length} ops in ${(performance.now() - start).toFixed(1)}ms`
+            );
             return result.ok === 1;
         } catch (error) {
             logger.error(`Error inserting trade batch: ${error}`);

@@ -13,26 +13,51 @@ puppeteer.use(StealthPlugin());
 export default class ScreenshotService {
     private browser: Browser | null = null;
     private proxy: Proxy | null = null;
+    private activeCaptures = 0;
+    private idleCloseTimer: NodeJS.Timeout | null = null;
+
+    private static readonly IDLE_BROWSER_CLOSE_MS = 5 * 60 * 1000;
 
     constructor(useProxy: boolean) {
         if (useProxy) this.proxy = ProxyService.getRandomProxy();
     }
 
     async start(): Promise<void> {
-        if (this.browser) return;
+        if (this.browser?.connected) {
+            this.clearIdleCloseTimer();
+            return;
+        }
+
+        this.browser = null;
+        this.clearIdleCloseTimer();
 
         const args = [
             '--no-sandbox',
             '--disable-setuid-sandbox',
             '--disable-blink-features=AutomationControlled',
-            '--display=:0',
-            '--disable-dev-shm-usage'
+            '--disable-dev-shm-usage',
+            '--disable-gpu',
+            '--disable-software-rasterizer',
+            '--disable-background-networking',
+            '--disable-default-apps',
+            '--disable-extensions',
+            '--disable-sync',
+            '--mute-audio',
+            '--no-first-run',
+            '--no-default-browser-check',
+            '--no-zygote'
         ];
+        if (!config.puppeteer.headless) args.push('--display=:0');
         if (this.proxy) args.push(`--proxy-server=http://${this.proxy.host}:${this.proxy.port}`);
+
         this.browser = await puppeteer.launch({
             headless: config.puppeteer.headless,
             executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
             args
+        });
+
+        this.browser.on('disconnected', () => {
+            this.browser = null;
         });
 
         logger.info(
@@ -41,8 +66,13 @@ export default class ScreenshotService {
     }
 
     async stop(): Promise<void> {
-        if (!this.browser) return;
-        await this.browser.close();
+        this.clearIdleCloseTimer();
+        const browser = this.browser;
+        this.browser = null;
+        if (!browser) return;
+        await browser.close().catch((error) => {
+            logger.warn(`Failed to stop Puppeteer cleanly: ${error}`);
+        });
         this.browser = null;
         logger.info('Puppeteer stopped');
     }
@@ -54,8 +84,11 @@ export default class ScreenshotService {
 
     private async captureInternal(url: string, selector?: string, waitFn?: () => boolean): Promise<Buffer | null> {
         let page: Page | null = null;
+        this.activeCaptures++;
+        this.clearIdleCloseTimer();
+
         try {
-            if (!this.browser) await this.start();
+            if (!this.browser || !this.browser.connected) await this.start();
 
             page = await this.browser!.newPage();
             if (!page) throw new Error('Failed to create a new page');
@@ -103,7 +136,25 @@ export default class ScreenshotService {
             logger.error(`Screenshot failed for ${url}: ${err}`);
             throw err;
         } finally {
-            if (page) await page.close().catch(() => { });
+            if (page) await page.close().catch(() => {});
+            this.activeCaptures = Math.max(0, this.activeCaptures - 1);
+            this.scheduleIdleClose();
         }
+    }
+
+    private clearIdleCloseTimer(): void {
+        if (!this.idleCloseTimer) return;
+        clearTimeout(this.idleCloseTimer);
+        this.idleCloseTimer = null;
+    }
+
+    private scheduleIdleClose(): void {
+        if (this.activeCaptures > 0 || !this.browser?.connected) return;
+
+        this.clearIdleCloseTimer();
+        this.idleCloseTimer = setTimeout(() => {
+            void this.stop();
+        }, ScreenshotService.IDLE_BROWSER_CLOSE_MS);
+        this.idleCloseTimer.unref?.();
     }
 }

@@ -91,8 +91,8 @@ export default class PolymarketService extends Tracker {
     private ws: WebSocket | null = null;
 
     async start(): Promise<void> {
-        if (this.monitoring) return;
-        this.monitoring = true;
+        if (this.running) return;
+        this.running = true;
         this.logger.info('Monitoring started');
 
         await this.backfill();
@@ -106,41 +106,70 @@ export default class PolymarketService extends Tracker {
     }
 
     async stop(): Promise<void> {
-        if (!this.monitoring) return;
-        this.monitoring = false;
-        await this.monitorTask?.catch((error) => this.logger.error(`Error while awaiting monitor task: ${error}`));
-        this.monitorTask = undefined;
-        this.logger.info('Monitoring stopped');
+        if (this.running) {
+            this.running = false;
+            await this.monitorTask?.catch((error) => this.logger.error(`Error while awaiting monitor task: ${error}`));
+            this.monitorTask = undefined;
+            this.logger.info('Monitoring stopped');
+        }
 
-        clearInterval(this.batchInterval!);
         this.affectedKeys.clear();
-        if (this.connectTimeout) clearTimeout(this.connectTimeout);
-        if (this.ws) this.ws.close();
-        if (this.batchInterval) clearInterval(this.batchInterval);
+
+        if (this.connectTimeout) {
+            clearTimeout(this.connectTimeout);
+            this.connectTimeout = null;
+        }
+
+        if (this.pingInterval) {
+            clearInterval(this.pingInterval);
+            this.pingInterval = null;
+        }
+
+        const ws = this.ws;
+        this.ws = null;
+        if (ws) {
+            ws.onopen = null;
+            ws.onmessage = null;
+            ws.onerror = null;
+            ws.onclose = null;
+            ws.close();
+        }
+
+        if (this.batchInterval) {
+            clearInterval(this.batchInterval);
+            this.batchInterval = null;
+        }
+
+        await this.flushTradeBatch().catch((error) =>
+            this.logger.error(`Error flushing trade batch during stop: ${error}`)
+        );
+        this.tradeBatch = [];
+
+        await this.screenshoter.stop();
     }
 
     private async mainLoop(): Promise<void> {
         const scanLoop = async () => {
-            while (this.monitoring) {
+            while (this.running) {
                 try {
                     await this.scanAndAlert();
                 } catch (error) {
                     this.logger.error(`Failed to alert: ${error}`);
                 }
-                if (!this.monitoring) break;
+                if (!this.running) break;
                 await this.cancellableSleep(config.monitor.intervalMs);
             }
         };
 
         const cleanupLoop = async () => {
-            while (this.monitoring) {
+            while (this.running) {
                 try {
                     await PolymarketDBService.cleanTrades(config.polymarket.cleanupTTLms);
                     await PolymarketDBService.cleanAlerts(config.polymarket.cleanupTTLms);
                 } catch (error) {
                     this.logger.error(`Failed to cleanup: ${error}`);
                 }
-                if (!this.monitoring) break;
+                if (!this.running) break;
                 await this.cancellableSleep(config.monitor.cleanupIntervalMs);
             }
         };
@@ -312,12 +341,19 @@ export default class PolymarketService extends Tracker {
     }
 
     private reconnectWebSocket() {
-        if (this.pingInterval) clearInterval(this.pingInterval);
-        if (this.connectTimeout) clearTimeout(this.connectTimeout);
+        if (this.pingInterval) {
+            clearInterval(this.pingInterval);
+            this.pingInterval = null;
+        }
+        if (this.connectTimeout) {
+            clearTimeout(this.connectTimeout);
+            this.connectTimeout = null;
+        }
+
         const ws = this.ws;
         this.ws = null;
         if (ws) ws.close();
-        if (this.monitoring) this.subscribeToLiveTrades();
+        if (this.running) this.subscribeToLiveTrades();
     }
 
     private async subscribeToLiveTrades() {
