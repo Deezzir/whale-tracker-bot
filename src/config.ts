@@ -58,9 +58,10 @@ export const config = {
         explorer: 'https://hypurrscan.io',
         batchSize: 1000,
         freshWindowMs: 2 * 24 * 60 * 60 * 1000, // 2 days,
-        checkIntervalMs: 30 * 60 * 1000, // 30 minutes
         batchFlushIntervalMs: 60 * 1000, // 1 minute
-        cleanupTTLms: 3 * 24 * 60 * 60 * 1000 // 3 days
+        cleanupTTLms: 3 * 24 * 60 * 60 * 1000, // 3 days
+        trackedCheckIntervalMs: 30 * 60 * 1000, // 30 minutes
+        analyzeIntervalMs: 15 * 60 * 1000 // 15 minutes
     },
     stake: {
         minAlertBetUSD: parseFloat(optionalEnv('STAKE_MIN_BET_USD', '10000')),

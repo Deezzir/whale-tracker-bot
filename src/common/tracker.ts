@@ -1,20 +1,17 @@
 import Tg from '../services/telegram';
-import Logger from './logger';
-import { sleep } from './utils';
 import { Mutex } from './mutex';
 import ScreenshotService from '../services/screenshoter';
+import { Runner } from './runner';
+import { sleep } from './utils';
 
 export interface ChatChannel {
     chatId: number;
     topicId?: number;
 }
 
-export abstract class Tracker {
-    public name: string = this.constructor.name;
-
+export abstract class Tracker extends Runner {
     protected screenshoter: ScreenshotService;
     protected useProxy: boolean;
-    protected logger = new Logger(this.name);
     protected tg: Tg;
     protected channels: ChatChannel[];
 
@@ -29,6 +26,7 @@ export abstract class Tracker {
     private scanStallCount = 0;
 
     constructor(tg: Tg, channels: ChatChannel[], useProxy = false, useProxyForScreenshots = false) {
+        super();
         this.tg = tg;
         this.channels = channels;
         this.useProxy = useProxy;

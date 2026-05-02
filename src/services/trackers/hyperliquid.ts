@@ -353,7 +353,7 @@ export default class HyperliquidService extends Tracker {
                     this.logger.error(`Failed to track:${error}`);
                 }
                 if (!this.running) break;
-                await this.cancellableSleep(config.hyperliquid.checkIntervalMs);
+                await this.cancellableSleep(config.hyperliquid.trackedCheckIntervalMs);
             }
         };
 
@@ -505,7 +505,7 @@ export default class HyperliquidService extends Tracker {
                 tracked.coin,
                 tracked.direction,
                 currentNotional,
-                config.hyperliquid.checkIntervalMs
+                config.hyperliquid.trackedCheckIntervalMs
             );
         } else {
             await HyperliquidDBService.addUpdateTrackedWallet(
@@ -513,7 +513,7 @@ export default class HyperliquidService extends Tracker {
                 tracked.coin,
                 tracked.direction,
                 tracked.totalNotional,
-                config.hyperliquid.checkIntervalMs
+                config.hyperliquid.trackedCheckIntervalMs
             );
         }
     }
