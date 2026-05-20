@@ -90,6 +90,17 @@ docker compose up --build
 
 This starts MongoDB, Redis, and the bot container.
 
+## Documentation
+
+- Architecture: `docs/architecture.md`
+- Data flow: `docs/data-flow.md`
+- Tracker deep dives:
+  - `docs/components/hyperliquid.md`
+  - `docs/components/polymarket.md`
+  - `docs/components/stake.md`
+- Configuration: `docs/configuration.md`
+- Operations runbook: `docs/operations.md`
+
 ## Telegram commands
 
 - `/stats <coin>`: Show Hyperliquid stats for a coin
