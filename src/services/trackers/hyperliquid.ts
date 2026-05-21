@@ -1446,24 +1446,24 @@ export default class HyperliquidService extends Tracker {
         }
 
         lines.push('');
-        lines.push(`👤 <b>Whale Profile</b> [${accountTag.tag}]`);
+        lines.push(`👤 <b>Whale Profile</b> [<i>${accountTag.tag}</i>]`);
         lines.push(`<b>Address:</b> <code>${escapeHtml(compressedWallet)}</code>`);
-        lines.push(`<b>First Deposit:</b> ${escapeHtml(firstDepositAgo)}`);
-        lines.push(`<b>Account Value:</b> <code>${formatCurrency(accountTag.totalValue)}</code>`);
-        lines.push(`<b>Perps Value:</b> <code>${formatCurrency(accountTag.perpsValue)}</code>`);
-        lines.push(`<b>Spot Value:</b> <code>${formatCurrency(accountTag.spotValue)}</code>`);
-        lines.push(`<b>Spot Holdings:</b> ${accountTag.spotCount}`);
-        lines.push(`<b>Coins Traded:</b> ${accountTag.perpsCount + accountTag.spotCount}`);
+        lines.push(`🕐 <b>First Deposit:</b> ${escapeHtml(firstDepositAgo)}`);
+        lines.push(`💰 <b>Account Value:</b> <code>${formatCurrency(accountTag.totalValue)}</code>`);
+        lines.push(
+            `📊 <b>Perps:</b> <code>${formatCurrency(accountTag.perpsValue)}</code> | <b>Spot:</b> <code>${formatCurrency(accountTag.spotValue)}</code>`
+        );
+        lines.push(`🪙 <b>Holdings:</b> ${accountTag.perpsCount} perps | ${accountTag.spotCount} spot`);
 
         if (otherPositions.length > 0) {
             lines.push('');
-            lines.push('📊 <b>Other Open Positions</b>');
+            lines.push('📊 <b>Open Positions</b>');
             for (const pos of otherPositions) {
                 const { direction: posDir, rank: posLev, pnl: posPnl } = this.api.extractPositionDetails(pos.position!);
                 const posDirIcon = posDir === 'long' ? '🟢' : '🔴';
                 const posNotional = Math.abs(parseFloat(pos.position!.szi) * parseFloat(pos.position!.entryPx || '0'));
                 lines.push(
-                    `${posDirIcon} <code>$${escapeHtml(pos.position!.coin)}</code> | ${formatCurrency(posNotional)} | ${posLev.toFixed(1)}x | PnL: ${formatCurrency(posPnl)}`
+                    `\u2003\u2003\u2003\u2003${posDirIcon} <b>${escapeHtml(pos.position!.coin)}</b> · ${formatCurrency(posNotional)} · ${posLev.toFixed(1)}x · <code>${formatCurrency(posPnl)}</code>`
                 );
             }
         }
@@ -1477,18 +1477,18 @@ export default class HyperliquidService extends Tracker {
 
         if (spotBalances.length > 0) {
             lines.push('');
-            lines.push('💰 <b>Top Spot Holdings</b>');
+            lines.push('💰 <b>Spot Holdings</b>');
             for (const bal of spotBalances) {
-                lines.push(`<code>${escapeHtml(bal.coin)}</code> | ${formatCurrency(bal.value)}`);
+                lines.push(`\u2003\u2003\u2003\u2003🪙 <b>${escapeHtml(bal.coin)}</b> · ${formatCurrency(bal.value)}`);
             }
         }
 
         lines.push('');
         const hashCoin = candidate.coin.replace(/[^a-zA-Z0-9]/g, '');
-        lines.push(`#${escapeHtml(hashCoin)} ${escapeHtml(compressedWallet)}`);
+        lines.push(`#${escapeHtml(hashCoin)}_${candidate.wallet.slice(2, 6)}${candidate.wallet.slice(-4)}`);
 
         const hypurrscanUrl = `${this.explorer}/address/${encodeURIComponent(candidate.wallet)}`;
-        const hyperdashUrl = `https://app.hyperdash.info/address/${encodeURIComponent(candidate.wallet)}`;
+        const hyperdashUrl = `https://hyperdash.com/address/${encodeURIComponent(candidate.wallet)}`;
 
         return {
             msg: lines.join('\n'),
@@ -1542,30 +1542,28 @@ export default class HyperliquidService extends Tracker {
             header,
             '',
             `${directionIcon} <b>Coin:</b> <code>$${escapeHtml(candidate.coin)}</code> (${directionLabel})`,
-            `<b>Position Size:</b> <code>${formatCurrency(candidate.totalNotional)}</code>`,
-            `<b>Leverage:</b> <code>${rank.toFixed(2)}x</code>`,
-            `<b>Entry Price:</b> <code>${escapeHtml(entryPrice)}</code>`,
-            `<b>Unrealized PnL:</b> <code>${formatCurrency(pnl)}</code>`,
+            `💵 <b>Size:</b> <code>${formatCurrency(candidate.totalNotional)}</code>`,
+            `⚡ <b>Leverage:</b> <code>${rank.toFixed(2)}x</code>`,
+            `🏷 <b>Entry:</b> <code>${escapeHtml(entryPrice)}</code>`,
+            `${pnl >= 0 ? '📈' : '📉'} <b>PnL:</b> <code>${formatCurrency(pnl)}</code>`,
             '',
-            `👤 <b>Whale Profile</b> [${accountTag.tag}]`,
+            `👤 <b>Whale Profile</b> [<i>${accountTag.tag}</i>]`,
             `<b>Address:</b> <code>${escapeHtml(compressedWallet)}</code>`,
-            `<b>First Deposit:</b> ${escapeHtml(firstDepositAgo)}`,
-            `<b>Account Value:</b> <code>${formatCurrency(accountTag.totalValue)}</code>`,
-            `<b>Perps Value:</b> <code>${formatCurrency(accountTag.perpsValue)}</code>`,
-            `<b>Spot Value:</b> <code>${formatCurrency(accountTag.spotValue)}</code>`,
-            `<b>Spot Holdings:</b> ${accountTag.spotCount}`,
-            `<b>Coins Traded:</b> ${accountTag.perpsCount + accountTag.spotCount}`
+            `🕐 <b>First Deposit:</b> ${escapeHtml(firstDepositAgo)}`,
+            `💰 <b>Account Value:</b> <code>${formatCurrency(accountTag.totalValue)}</code>`,
+            `📊 <b>Perps:</b> <code>${formatCurrency(accountTag.perpsValue)}</code> | <b>Spot:</b> <code>${formatCurrency(accountTag.spotValue)}</code>`,
+            `🪙 <b>Holdings:</b> ${accountTag.perpsCount} perps | ${accountTag.spotCount} spot`
         ];
 
         if (otherPositions.length > 0) {
             lines.push('');
-            lines.push('📊 <b>Other Open Positions</b>');
+            lines.push('📊 <b>Open Positions</b>');
             for (const pos of otherPositions) {
                 const { direction: posDir, rank: posLev, pnl: posPnl } = this.api.extractPositionDetails(pos.position!);
                 const posDirIcon = posDir === 'long' ? '🟢' : '🔴';
                 const posNotional = Math.abs(parseFloat(pos.position!.szi) * parseFloat(pos.position!.entryPx || '0'));
                 lines.push(
-                    `${posDirIcon} <code>$${escapeHtml(pos.position!.coin)}</code> | ${formatCurrency(posNotional)} | ${posLev.toFixed(1)}x | PnL: ${formatCurrency(posPnl)}`
+                    `\u2003\u2003\u2003\u2003${posDirIcon} <b>${escapeHtml(pos.position!.coin)}</b> · ${formatCurrency(posNotional)} · ${posLev.toFixed(1)}x · <code>${formatCurrency(posPnl)}</code>`
                 );
             }
         }
@@ -1579,18 +1577,18 @@ export default class HyperliquidService extends Tracker {
 
         if (spotBalances.length > 0) {
             lines.push('');
-            lines.push('💰 <b>Top Spot Holdings</b>');
+            lines.push('💰 <b>Spot Holdings</b>');
             for (const bal of spotBalances) {
-                lines.push(`<code>${escapeHtml(bal.coin)}</code> | ${formatCurrency(bal.value)}`);
+                lines.push(`\u2003\u2003\u2003\u2003🪙 <b>${escapeHtml(bal.coin)}</b> · ${formatCurrency(bal.value)}`);
             }
         }
 
         lines.push('');
         const hashCoin = candidate.coin.replace(/[^a-zA-Z0-9]/g, '');
-        lines.push(`#${escapeHtml(hashCoin)} ${escapeHtml(compressedWallet)}`);
+        lines.push(`#${escapeHtml(hashCoin)}_${candidate.wallet.slice(2, 6)}${candidate.wallet.slice(-4)}`);
 
         const hypurrscanUrl = `${this.explorer}/address/${encodeURIComponent(candidate.wallet)}`;
-        const hyperdashUrl = `https://app.hyperdash.info/address/${encodeURIComponent(candidate.wallet)}`;
+        const hyperdashUrl = `https://hyperdash.com/address/${encodeURIComponent(candidate.wallet)}`;
 
         return {
             msg: lines.join('\n'),

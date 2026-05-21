@@ -80,13 +80,14 @@ export default class TelegramService {
         }
 
         const fmt = (n: number) => `$${n.toLocaleString('en-US')}`;
+        const fmtH = (ms: number) => `${Math.round(ms / (60 * 60 * 1000))}h`;
         const message = [
             `<b>🟢 Whale Tracker Bot</b>`,
             ``,
             `┌─ <b>Polymarket configs</b>`,
             `  🎰 Regular threshold: <b>${fmt(config.polymarket.alertThresholdUsd)}</b>`,
             `  ⚽ Sport threshold: <b>${fmt(config.polymarket.sportAlertThresholdUsd)}</b>`,
-            `  📈 Re-alert: <b>+${fmt(config.polymarket.minimalGrowthPercent)}%</b> of last position`,
+            `  📈 Re-alert: <b>+${config.polymarket.minimalGrowthPercent}%</b> of last position`,
             `  ⏳ Data retention: <b>${config.polymarket.cleanupTTLms / (24 * 60 * 60 * 1000)} days</b>`,
             `└─`,
             ``,
@@ -96,8 +97,12 @@ export default class TelegramService {
             `└─`,
             ``,
             `┌─ <b>Hyperliquid configs</b>`,
-            `  🎰 Minimum notional: <b>${fmt(config.hyperliquid.minNotionalUSD)}</b>`,
-            `  📈 Re-alert: <b>+${fmt(config.hyperliquid.minimalGrowthPercent)}%</b> of the position increase`,
+            `  🆕 Fresh Wallet: <b>${fmt(config.hyperliquid.freshMinUSD)}</b> (BTC/ETH: ${fmt(config.hyperliquid.freshBtcEthMinUSD)}, Main: ${fmt(config.hyperliquid.freshMainCoinMinUSD)})`,
+            `  🐋 Whale Activity: <b>${fmt(config.hyperliquid.whaleMinUSD)}</b>`,
+            `  🚨 Big Whale: <b>${fmt(config.hyperliquid.bigWhaleMinUSD)}</b>`,
+            `  🔄 TWAP: <b>${fmt(config.hyperliquid.twapOtherMinUSD)}</b> (BTC/ETH: ${fmt(config.hyperliquid.twapBtcEthMinUSD)})`,
+            `  ⏱ Fresh window: <b>${fmtH(config.hyperliquid.freshWindowMs)}</b>`,
+            `  📈 Re-alert: <b>+${config.hyperliquid.minimalGrowthPercent}%</b> of position increase`,
             `  ⏳ Data retention: <b>${config.hyperliquid.cleanupTTLms / (24 * 60 * 60 * 1000)} days</b>`,
             `└─`
         ].join('\n');
@@ -108,7 +113,7 @@ export default class TelegramService {
         logger.info('Startup message sent and pinned');
     }
 
-    public async sendRestarUnhealthyAlert(error?: string): Promise<void> {
+    public async sendRestartUnhealthyAlert(error?: string): Promise<void> {
         let message = `<b>🛑 Restarting bot, some services are unhealthy.</b>`;
         if (error) message += `\n\n${error}`;
         await this.sendMessage(config.telegram.ownerUserID, message);

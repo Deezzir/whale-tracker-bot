@@ -185,7 +185,9 @@ async function main(): Promise<void> {
     logger.info('Starting monitoring services...');
     startMonitoringServices();
     healthServer.start(async (error?: string) => {
-        telegram.sendRestarUnhealthyAlert(error).catch((err) => logger.error(`Failed to send unhealthy alert: ${err}`));
+        telegram
+            .sendRestartUnhealthyAlert(error)
+            .catch((err) => logger.error(`Failed to send unhealthy alert: ${err}`));
         shutdown(1);
     });
 
