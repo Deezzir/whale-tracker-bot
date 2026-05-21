@@ -6,6 +6,11 @@ const logger = new Logger('HyperliquidDB');
 // Hyperliquid wallet aggregation schema
 export type HyperTradeDirection = 'long' | 'short' | 'spot';
 
+export interface TradeSnapshot {
+    ts: number;
+    size: number;
+}
+
 interface HyperAggregationDocument extends Document {
     wallet: string;
     coin: string;
@@ -14,6 +19,7 @@ interface HyperAggregationDocument extends Document {
     totalNotional: number;
     tradeCount: number;
     lastTradeTime: number;
+    trades?: TradeSnapshot[];
 }
 
 export type HyperAggregationRecord = Omit<HyperAggregationDocument, keyof Document> & {
@@ -28,7 +34,8 @@ const HyperAggregationSchema = new Schema<HyperAggregationDocument>(
         direction: { type: String, required: true, enum: ['long', 'short', 'spot'] },
         totalNotional: { type: Number, default: 0 },
         tradeCount: { type: Number, default: 0 },
-        lastTradeTime: { type: Number, default: 0 }
+        lastTradeTime: { type: Number, default: 0 },
+        trades: { type: [{ ts: Number, size: Number }], default: [] }
     },
     { timestamps: true }
 );
@@ -78,6 +85,7 @@ interface HyperAlert {
     coin: string;
     totalNotional: number;
     direction: HyperTradeDirection;
+    branch?: string;
     sentAt: Date;
     chatId: number;
     messageId?: number;
@@ -90,6 +98,7 @@ const HyperAlertSchema = new Schema<HyperAlertDocument>(
         wallet: { type: String, required: true },
         coin: { type: String, required: true },
         direction: { type: String, required: true, enum: ['long', 'short', 'spot'] },
+        branch: { type: String, enum: ['FRESH_WALLET', 'WHALE_ACTIVITY', 'BIG_WHALE', 'BIG_TWAP'], required: false },
         totalNotional: { type: Number, required: true },
         sentAt: { type: Date, required: true },
         chatId: { type: Number, required: true },
@@ -98,8 +107,8 @@ const HyperAlertSchema = new Schema<HyperAlertDocument>(
     { timestamps: true }
 );
 
-HyperAlertSchema.index({ wallet: 1, coin: 1, direction: 1, chatId: 1 });
-HyperAlertSchema.index({ wallet: 1, coin: 1, direction: 1, chatId: 1, sentAt: -1 });
+HyperAlertSchema.index({ wallet: 1, coin: 1, direction: 1, branch: 1, chatId: 1 });
+HyperAlertSchema.index({ wallet: 1, coin: 1, direction: 1, branch: 1, chatId: 1, sentAt: -1 });
 HyperAlertSchema.index({ sentAt: 1 });
 
 const HyperAlertModel =
@@ -202,6 +211,7 @@ export default class HyperliquidDBService {
                     totalNotional: number;
                     tradeCount: number;
                     lastTradeTime: number;
+                    trades: TradeSnapshot[];
                 }
             >();
 
@@ -214,33 +224,48 @@ export default class HyperliquidDBService {
                     existing.totalNotional += trade.notional;
                     existing.tradeCount += 1;
                     existing.lastTradeTime = Math.max(existing.lastTradeTime, trade.tradeTime);
+                    if (trade.direction === 'spot') {
+                        existing.trades.push({ ts: trade.tradeTime, size: trade.notional });
+                    }
                     continue;
+                }
+
+                const trades_: TradeSnapshot[] = [];
+                if (trade.direction === 'spot') {
+                    trades_.push({ ts: trade.tradeTime, size: trade.notional });
                 }
 
                 aggregated.set(key, {
                     filter: { wallet: trade.wallet, coin: trade.coin, dateKey, direction: trade.direction },
                     totalNotional: trade.notional,
                     tradeCount: 1,
-                    lastTradeTime: trade.tradeTime
+                    lastTradeTime: trade.tradeTime,
+                    trades: trades_
                 });
             }
 
-            const bulkOps = Array.from(aggregated.values()).map((entry) => ({
-                updateOne: {
-                    filter: entry.filter,
-                    update: {
-                        $inc: {
-                            totalNotional: entry.totalNotional,
-                            tradeCount: entry.tradeCount
-                        },
-                        $set: {
-                            lastTradeTime: entry.lastTradeTime
-                        }
+            const bulkOps = Array.from(aggregated.values()).map((entry) => {
+                const update: any = {
+                    $inc: {
+                        totalNotional: entry.totalNotional,
+                        tradeCount: entry.tradeCount
                     },
-                    upsert: true,
-                    setDefaultsOnInsert: true
+                    $set: {
+                        lastTradeTime: entry.lastTradeTime
+                    }
+                };
+                if (entry.filter.direction === 'spot' && entry.trades.length > 0) {
+                    update.$push = { trades: { $each: entry.trades } };
                 }
-            }));
+                return {
+                    updateOne: {
+                        filter: entry.filter,
+                        update,
+                        upsert: true,
+                        setDefaultsOnInsert: true
+                    }
+                };
+            });
 
             if (bulkOps.length === 0) return true;
 
@@ -451,13 +476,16 @@ export default class HyperliquidDBService {
         wallet: string,
         coin: string,
         direction: HyperTradeDirection,
-        chatIds: number[]
+        chatIds: number[],
+        branch?: string
     ): Promise<Map<number, HyperAlert>> {
         if (chatIds.length === 0) return new Map();
         try {
             const start = performance.now();
+            const matchFilter: any = { wallet, coin, direction, chatId: { $in: chatIds } };
+            if (branch) matchFilter.branch = branch;
             const docs = await HyperAlertModel.aggregate<{ _id: number; doc: HyperAlert }>([
-                { $match: { wallet, coin, direction, chatId: { $in: chatIds } } },
+                { $match: matchFilter },
                 { $sort: { sentAt: -1 } },
                 { $group: { _id: '$chatId', doc: { $first: '$$ROOT' } } }
             ]);

@@ -41,7 +41,7 @@ export const config = {
     },
     monitor: {
         cacheTTLMs: 5 * 60 * 1000, // 2 minutes,
-        intervalMs: 30 * 1000, // 30 secondss
+        intervalMs: 30 * 1000, // 30 seconds
         cleanupIntervalMs: 60 * 60 * 1000, // 1 hour
         noDataTimeoutMs: 5 * 60 * 1000, // 5 minutes
         scanStallTimeoutMs: 5 * 60 * 1000 // 5 minutes
@@ -50,14 +50,21 @@ export const config = {
         minNotionalUSD: parseFloat(optionalEnv('HS_MIN_NOTIONAL_USD', '250000')),
         minSpotNotionalUSD: parseFloat(optionalEnv('HS_MIN_SPOT_NOTIONAL_USD', '300000')),
         aggregationWindowMs: parseInt(optionalEnv('HS_AGGREGATION_WINDOW_MS', String(3 * 24 * 60 * 60 * 1000)), 10),
-        minimalGrowthPercent: parseFloat(optionalEnv('HS_POS_CHANGE_ALERT_PERCENT', '20')),
+        minimalGrowthPercent: parseFloat(optionalEnv('HS_POS_CHANGE_ALERT_PERCENT', '9')),
         minimalGrowthUSD: parseFloat(optionalEnv('HS_POS_CHANGE_ALERT_USD', '50000')),
-        mainCoins: ['BTC', 'ETH', 'SOL'] as string[],
+        mainCoins: ['BTC', 'ETH', 'BNB', 'XRP', 'ZEC', 'DOGE', 'SOL', 'HYPE'] as string[],
+        freshMinUSD: parseFloat(optionalEnv('HS_FRESH_MIN_USD', '200000')),
+        freshMainCoinMinUSD: parseFloat(optionalEnv('HS_FRESH_MAIN_COIN_MIN_USD', '450000')),
+        freshBtcEthMinUSD: parseFloat(optionalEnv('HS_FRESH_BTC_ETH_MIN_USD', '2000000')),
+        whaleMinUSD: parseFloat(optionalEnv('HS_WHALE_MIN_USD', '300000')),
+        bigWhaleMinUSD: parseFloat(optionalEnv('HS_BIG_WHALE_MIN_USD', '1000000')),
+        twapBtcEthMinUSD: parseFloat(optionalEnv('HS_TWAP_BTC_ETH_MIN_USD', '1000000')),
+        twapOtherMinUSD: parseFloat(optionalEnv('HS_TWAP_OTHER_MIN_USD', '300000')),
         wss: 'wss://api.hyperliquid.xyz/ws',
         api: 'https://api.hyperliquid.xyz/info',
         explorer: 'https://hypurrscan.io',
         batchSize: 1000,
-        freshWindowMs: 2 * 24 * 60 * 60 * 1000, // 2 days,
+        freshWindowMs: parseInt(optionalEnv('HS_FRESH_WINDOW_MS', String(50 * 60 * 60 * 1000)), 10),
         batchFlushIntervalMs: 60 * 1000, // 1 minute
         cleanupTTLms: 3 * 24 * 60 * 60 * 1000, // 3 days
         trackedCheckIntervalMs: 30 * 60 * 1000, // 30 minutes

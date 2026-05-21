@@ -107,6 +107,27 @@ interface PerpDex {
     assetToFundingMultiplier: string[][];
 }
 
+export interface L2BookLevel {
+    px: string;
+    sz: string;
+    n: number;
+}
+
+export interface L2BookResponse {
+    levels: [L2BookLevel[], L2BookLevel[]]; // [bids, asks]
+}
+
+export interface TokenDetails {
+    name: string;
+    totalSupply: string;
+    circulatingSupply: string;
+    midPx: string;
+    markPx: string;
+    prevDayPx: string;
+    deployer: string;
+    deployTime: string;
+}
+
 const REQ_TIMEOUT = 10 * 1000; // 10 seconds
 
 const axiosConfig = { headers: { 'Content-Type': 'application/json' }, timeout: REQ_TIMEOUT };
@@ -330,7 +351,7 @@ export default class HyperliquidAPI {
             if (!response) throw new Error('Failed to fetch spot meta from Hyperliquid API');
             const { tokens, universe } = response;
 
-            const coints = universe.map((pair) => {
+            const coins = universe.map((pair) => {
                 const baseToken = tokens.find((t) => t.index === pair.tokens[0]);
                 const quoteToken = tokens.find((t) => t.index === pair.tokens[1]);
                 return {
@@ -338,8 +359,8 @@ export default class HyperliquidAPI {
                     displayName: `${baseToken?.name || 'UNKNOWN'}/${quoteToken?.name || 'UNKNOWN'}`
                 };
             });
-            await this.redis.setEx(cacheKey, config.monitor.cacheTTLMs / 1000, JSON.stringify(coints));
-            return coints;
+            await this.redis.setEx(cacheKey, config.monitor.cacheTTLMs / 1000, JSON.stringify(coins));
+            return coins;
         } catch (error) {
             logger.error(`Failed to fetch spot coins: ${error}`);
             return [];
@@ -380,5 +401,51 @@ export default class HyperliquidAPI {
         const pnl: number = pos.unrealizedPnl ? parseFloat(pos.unrealizedPnl) : 0;
         const entryPrice: string = pos.entryPx || 'N/A';
         return { direction, rank, pnl, entryPrice };
+    }
+
+    public async fetchL2Book(coin: string): Promise<L2BookResponse | null> {
+        const cacheKey = `hs:l2book:${coin}`;
+        const cached = await this.redis.get(cacheKey);
+        if (cached) return JSON.parse(cached);
+
+        try {
+            const operation = () => axios.post(this.api, { type: 'l2Book', coin }, axiosConfig);
+            const response = await retryWithBackoff(operation);
+            const data = response.data as L2BookResponse;
+            await this.redis.setEx(cacheKey, 60, JSON.stringify(data));
+            return data;
+        } catch (error) {
+            logger.error(`Failed to fetch L2 book for ${coin}: ${error}`);
+            return null;
+        }
+    }
+
+    public async fetchTokenDetails(tokenId: string): Promise<TokenDetails | null> {
+        const cacheKey = `hs:token-details:${tokenId}`;
+        const cached = await this.redis.get(cacheKey);
+        if (cached) return JSON.parse(cached);
+
+        try {
+            const operation = () => axios.post(this.api, { type: 'tokenDetails', tokenId }, axiosConfig);
+            const response = await retryWithBackoff(operation);
+            const data = response.data as TokenDetails;
+            await this.redis.setEx(cacheKey, config.monitor.cacheTTLMs / 1000, JSON.stringify(data));
+            return data;
+        } catch (error) {
+            logger.error(`Failed to fetch token details for ${tokenId}: ${error}`);
+            return null;
+        }
+    }
+
+    public computeDepthFromBook(book: L2BookResponse, midPx: number, pctFromMid: number = 0.5): number {
+        const threshold = midPx * (1 - pctFromMid / 100);
+        let depth = 0;
+        for (const level of book.levels[0]) {
+            // bids
+            const px = parseFloat(level.px);
+            if (px < threshold) break;
+            depth += px * parseFloat(level.sz);
+        }
+        return depth;
     }
 }

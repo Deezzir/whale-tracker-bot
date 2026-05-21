@@ -25,12 +25,14 @@ These are required at startup (`requireEnv(...)` in `src/config.ts`):
 ## Optional Environment Variables (Selected)
 
 General/runtime:
+
 - `NODE_ENV`
 - `LOG_FILE_ENABLED`
 - `LOG_LEVEL`
 - `HEALTH_SERVER_PORT`
 
 DB/cache:
+
 - `MONGODB_URI`
 - `DB_NAME`
 - `REDIS_URL`
@@ -39,13 +41,29 @@ DB/cache:
 - `DB_ENSURE_INDEXES_ON_START`
 
 Hyperliquid:
+
 - `HS_MIN_NOTIONAL_USD`
 - `HS_MIN_SPOT_NOTIONAL_USD`
 - `HS_AGGREGATION_WINDOW_MS`
 - `HS_POS_CHANGE_ALERT_PERCENT`
 - `HS_POS_CHANGE_ALERT_USD`
 
+### Alert Branch Thresholds
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `HS_FRESH_WINDOW_MS` | `180000000` (50h) | Time window to consider a wallet "fresh" |
+| `HS_FRESH_MIN_USD` | `200000` | Min position for fresh wallet alert (other coins) |
+| `HS_FRESH_MAIN_COIN_MIN_USD` | `450000` | Min position for fresh wallet alert (main coins) |
+| `HS_FRESH_BTC_ETH_MIN_USD` | `2000000` | Min position for fresh wallet alert (BTC/ETH) |
+| `HS_WHALE_MIN_USD` | `300000` | Min position for whale activity alert (all coins) |
+| `HS_BIG_WHALE_MIN_USD` | `1000000` | Min position for big whale alert (all coins) |
+| `HS_TWAP_BTC_ETH_MIN_USD` | `1000000` | Min accumulation for TWAP alert (BTC/ETH) |
+| `HS_TWAP_OTHER_MIN_USD` | `300000` | Min accumulation for TWAP alert (other coins) |
+| `HS_POS_CHANGE_ALERT_PERCENT` | `9` | Re-alert growth threshold (%) |
+
 Polymarket:
+
 - `POLY_ALERT_THRESHOLD_USD`
 - `POLY_SPORT_BET_ALERT_THRESHOLD_USD`
 - `POLY_MAX_PRICE_FILTER`
@@ -54,9 +72,11 @@ Polymarket:
 - `POLY_AGGREGATION_WINDOW_MS`
 
 Stake:
+
 - `STAKE_MIN_BET_USD`
 
 Puppeteer:
+
 - `PUPPETEER_SCREENSHOT_ENABLED`
 - `PUPPETEER_USER_DIR`
 - `PUPPETEER_HEADLESS`
@@ -65,16 +85,19 @@ Puppeteer:
 - `PUPPETEER_EXECUTABLE_PATH` (read directly by tracker/screenshoter services)
 
 OpenRouter:
+
 - `OPENROUTER_CLASSIFIER_PROMPT_TEMPLATE_PATH`
 - `OPENROUTER_FAST_MODEL`
 
 ## Important Naming Drift
 
 Legacy docs/examples may still reference:
+
 - `HS_MAIN_TOPIC_ID`
 - `HS_OTHER_TOPIC_ID`
 
 Current code expects split topic keys:
+
 - `HS_MAIN_PERPS_TOPIC_ID`
 - `HS_OTHER_PERPS_TOPIC_ID`
 - `HS_MAIN_SPOT_TOPIC_ID`

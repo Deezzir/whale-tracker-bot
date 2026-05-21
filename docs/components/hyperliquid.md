@@ -33,12 +33,25 @@ Normalization details:
 
 ## Alert Rules
 
-- Base thresholds from `config.hyperliquid`:
-  - `minNotionalUSD` (perps)
-  - `minSpotNotionalUSD` (spot)
-- Candidate validation uses upstream trader state to avoid stale/false signals.
-- Re-alert only when growth exceeds dynamic threshold:
-  - max(percent growth threshold, fixed USD threshold)
+Candidates are classified into one of four alert branches:
+
+1. **Fresh Wallet** — wallet first seen < 50h ago (configurable via `HS_FRESH_WINDOW_MS`). Tiered thresholds:
+   - BTC/ETH: >= $2M (`HS_FRESH_BTC_ETH_MIN_USD`)
+   - Main coins (BTC, ETH, BNB, XRP, ZEC, DOGE, SOL, HYPE): >= $450K (`HS_FRESH_MAIN_COIN_MIN_USD`)
+   - Other coins: >= $200K (`HS_FRESH_MIN_USD`)
+
+2. **Whale Activity** — wallet > 50h old, position >= $300K (`HS_WHALE_MIN_USD`)
+
+3. **Big Whale** — any wallet, position >= $1M (`HS_BIG_WHALE_MIN_USD`)
+
+4. **Big TWAP** — spot buy accumulation with >= 5 trades in window:
+   - BTC/ETH: >= $1M (`HS_TWAP_BTC_ETH_MIN_USD`)
+   - Other coins: >= $300K (`HS_TWAP_OTHER_MIN_USD`)
+
+Re-alert only when growth exceeds dynamic threshold:
+- max(percent growth threshold, fixed USD threshold)
+
+`mainCoins` list: BTC, ETH, BNB, XRP, ZEC, DOGE, SOL, HYPE.
 
 Alert destinations:
 - Perps and spot route to separate main/other channel groups.
@@ -83,7 +96,7 @@ Common operations:
 ## Safe Change Points
 
 - Threshold/routing changes: `src/config.ts`, tracker constructor wiring in `src/index.ts`.
-- Message formatting changes: `formatAlertMessage(...)` and related formatter helpers.
+- Message formatting changes: `formatBranchAlert(...)` and related formatter helpers.
 - Position classification logic: private helper methods inside this tracker.
 
 ## Verification After Changes
