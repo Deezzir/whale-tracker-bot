@@ -404,7 +404,8 @@ export default class HyperliquidDBService {
                     direction: 1,
                     totalNotional: 1,
                     tradeCount: 1,
-                    lastTradeTime: 1
+                    lastTradeTime: 1,
+                    trades: 1
                 }
             )
                 .lean()
@@ -421,7 +422,8 @@ export default class HyperliquidDBService {
                 direction: doc.direction as HyperTradeDirection,
                 totalNotional: doc.totalNotional,
                 tradeCount: doc.tradeCount,
-                lastTradeTime: doc.lastTradeTime
+                lastTradeTime: doc.lastTradeTime,
+                trades: (doc as any).trades || []
             }));
         } catch (error) {
             logger.error(`${error}`);

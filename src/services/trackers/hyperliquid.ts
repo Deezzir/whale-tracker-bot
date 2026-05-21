@@ -1056,105 +1056,49 @@ export default class HyperliquidService extends Tracker {
             return;
         }
 
+        // Use only the highest-priority branch (BIG_WHALE > FRESH_WALLET > WHALE_ACTIVITY)
+        const branch = branches[0];
         const alertChannels = this.getAlertChannels(candidate.coin, candidate.direction);
 
-        for (const branch of branches) {
-            const lastAlerts = await HyperliquidDBService.getLastAlerts(
-                candidate.wallet,
-                candidate.coin,
-                candidate.direction,
-                alertChannels.map((c) => c.chatId),
-                branch
+        const lastAlerts = await HyperliquidDBService.getLastAlerts(
+            candidate.wallet,
+            candidate.coin,
+            candidate.direction,
+            alertChannels.map((c) => c.chatId),
+            branch
+        );
+
+        if (lastAlerts.size > 0) {
+            const latestAlert = [...lastAlerts.values()].reduce((a, b) =>
+                new Date(a.sentAt) > new Date(b.sentAt) ? a : b
             );
-
-            if (lastAlerts.size > 0) {
-                const latestAlert = [...lastAlerts.values()].reduce((a, b) =>
-                    new Date(a.sentAt) > new Date(b.sentAt) ? a : b
+            const growth = candidate.totalNotional - latestAlert.totalNotional;
+            const dynamicThreshold = Math.max(
+                (latestAlert.totalNotional * config.hyperliquid.minimalGrowthPercent) / 100,
+                config.hyperliquid.minimalGrowthUSD
+            );
+            if (growth < dynamicThreshold) {
+                this.logger.debug(
+                    `Skipping ${branch} for ${candidate.wallet} ${candidate.coin}: growth ${growth} < threshold ${dynamicThreshold}`
                 );
-                const growth = candidate.totalNotional - latestAlert.totalNotional;
-                const dynamicThreshold = Math.max(
-                    (latestAlert.totalNotional * config.hyperliquid.minimalGrowthPercent) / 100,
-                    config.hyperliquid.minimalGrowthUSD
-                );
-                if (growth < dynamicThreshold) {
-                    this.logger.debug(
-                        `Skipping ${branch} for ${candidate.wallet} ${candidate.coin}: growth ${growth} < threshold ${dynamicThreshold}`
-                    );
-                    continue;
-                }
-
-                this.logger.info(
-                    `Re-alert ${branch} for ${candidate.wallet} ${candidate.coin}: growth ${growth} >= threshold ${dynamicThreshold}`
-                );
-                const replyText = this.formatGrowingPositionMessage(candidate.totalNotional, latestAlert.totalNotional);
-                for (let i = 0; i < alertChannels.length; i++) {
-                    if (i > 0) await sleep(1000);
-                    const channel = alertChannels[i];
-                    const prevAlert = lastAlerts.get(channel.chatId);
-                    let messageId: number | undefined;
-                    if (prevAlert?.messageId) {
-                        await this.tg.sendReply(channel.chatId, replyText, prevAlert.messageId);
-                        messageId = prevAlert.messageId;
-                    } else {
-                        messageId = await this.tg.sendMessage(channel.chatId, replyText, {
-                            message_thread_id: channel.topicId
-                        });
-                    }
-                    await HyperliquidDBService.insertAlert({
-                        wallet: candidate.wallet,
-                        coin: candidate.coin,
-                        direction: candidate.direction,
-                        totalNotional: candidate.totalNotional,
-                        sentAt: new Date(),
-                        chatId: channel.chatId,
-                        messageId,
-                        branch
-                    });
-                }
-                continue;
+                return;
             }
 
             this.logger.info(
-                `Sending ${branch} alert: ${candidate.wallet} ${candidate.coin} ${formatCurrency(candidate.totalNotional)} (${candidate.direction})`
+                `Re-alert ${branch} for ${candidate.wallet} ${candidate.coin}: growth ${growth} >= threshold ${dynamicThreshold}`
             );
-
-            const result = this.formatBranchAlert(branch, { candidate, state, portfolio }, positionState!);
-            if (!result) continue;
-            const { msg, buttons } = result;
-
-            let screenshot: Buffer | null = null;
-            if (config.puppeteer.screenshotEnabled) {
-                screenshot = await this.screenshoter.capture(
-                    `${this.explorer}/address/${candidate.wallet}#perps`,
-                    undefined,
-                    () => {
-                        const result = document.evaluate(
-                            '//div[text()=" Overview "]/div/span',
-                            document,
-                            null,
-                            XPathResult.FIRST_ORDERED_NODE_TYPE,
-                            null
-                        );
-                        const el = result.singleNodeValue as Element | null;
-                        if (!el?.textContent) return false;
-                        const num = parseFloat(el.textContent.replace(/,/g, '').replace('$', ''));
-                        return !isNaN(num) && num > 0;
-                    }
-                );
-            }
+            const replyText = this.formatGrowingPositionMessage(candidate.totalNotional, latestAlert.totalNotional);
             for (let i = 0; i < alertChannels.length; i++) {
                 if (i > 0) await sleep(1000);
                 const channel = alertChannels[i];
+                const prevAlert = lastAlerts.get(channel.chatId);
                 let messageId: number | undefined;
-                if (screenshot) {
-                    messageId = await this.tg.sendPhoto(channel.chatId, screenshot, msg, {
-                        reply_markup: buttons,
-                        message_thread_id: channel.topicId
-                    });
+                if (prevAlert?.messageId) {
+                    await this.tg.sendReply(channel.chatId, replyText, prevAlert.messageId);
+                    messageId = prevAlert.messageId;
                 } else {
-                    messageId = await this.tg.sendMessage(channel.chatId, msg, {
-                        message_thread_id: channel.topicId,
-                        reply_markup: buttons
+                    messageId = await this.tg.sendMessage(channel.chatId, replyText, {
+                        message_thread_id: channel.topicId
                     });
                 }
                 await HyperliquidDBService.insertAlert({
@@ -1168,6 +1112,62 @@ export default class HyperliquidService extends Tracker {
                     branch
                 });
             }
+            return;
+        }
+
+        this.logger.info(
+            `Sending ${branch} alert: ${candidate.wallet} ${candidate.coin} ${formatCurrency(candidate.totalNotional)} (${candidate.direction})`
+        );
+
+        const result = this.formatBranchAlert(branch, { candidate, state, portfolio }, positionState!);
+        if (!result) return;
+        const { msg, buttons } = result;
+
+        let screenshot: Buffer | null = null;
+        if (config.puppeteer.screenshotEnabled) {
+            screenshot = await this.screenshoter.capture(
+                `${this.explorer}/address/${candidate.wallet}#perps`,
+                undefined,
+                () => {
+                    const result = document.evaluate(
+                        '//div[text()=" Overview "]/div/span',
+                        document,
+                        null,
+                        XPathResult.FIRST_ORDERED_NODE_TYPE,
+                        null
+                    );
+                    const el = result.singleNodeValue as Element | null;
+                    if (!el?.textContent) return false;
+                    const num = parseFloat(el.textContent.replace(/,/g, '').replace('$', ''));
+                    return !isNaN(num) && num > 0;
+                }
+            );
+        }
+        for (let i = 0; i < alertChannels.length; i++) {
+            if (i > 0) await sleep(1000);
+            const channel = alertChannels[i];
+            let messageId: number | undefined;
+            if (screenshot) {
+                messageId = await this.tg.sendPhoto(channel.chatId, screenshot, msg, {
+                    reply_markup: buttons,
+                    message_thread_id: channel.topicId
+                });
+            } else {
+                messageId = await this.tg.sendMessage(channel.chatId, msg, {
+                    message_thread_id: channel.topicId,
+                    reply_markup: buttons
+                });
+            }
+            await HyperliquidDBService.insertAlert({
+                wallet: candidate.wallet,
+                coin: candidate.coin,
+                direction: candidate.direction,
+                totalNotional: candidate.totalNotional,
+                sentAt: new Date(),
+                chatId: channel.chatId,
+                messageId,
+                branch
+            });
         }
     }
 
@@ -1412,7 +1412,7 @@ export default class HyperliquidService extends Tracker {
         }
 
         const notionalPctOfMcap = marketCap > 0 ? (candidate.totalNotional / marketCap) * 100 : 0;
-        const otherPositions = getTopPositions(state.perp!.assetPositions || [], '', 5);
+        const otherPositions = getTopPositions(state.perp!.assetPositions || [], '', 3);
 
         const dirIcon = '🟢';
         const durationStr =
@@ -1446,7 +1446,7 @@ export default class HyperliquidService extends Tracker {
         }
 
         lines.push('');
-        lines.push(`👤 <b>Whale Profile</b>`);
+        lines.push(`👤 <b>Whale Profile</b> [${accountTag.tag}]`);
         lines.push(`<b>Address:</b> <code>${escapeHtml(compressedWallet)}</code>`);
         lines.push(`<b>First Deposit:</b> ${escapeHtml(firstDepositAgo)}`);
         lines.push(`<b>Account Value:</b> <code>${formatCurrency(accountTag.totalValue)}</code>`);
@@ -1468,8 +1468,24 @@ export default class HyperliquidService extends Tracker {
             }
         }
 
+        // Top spot holdings
+        const spotBalances = state
+            .spot!.balances.filter((b) => parseFloat(b.total) > 0 && b.coin !== 'USDC')
+            .map((b) => ({ coin: b.coin, value: parseFloat(b.px) * parseFloat(b.total) }))
+            .sort((a, b) => b.value - a.value)
+            .slice(0, 3);
+
+        if (spotBalances.length > 0) {
+            lines.push('');
+            lines.push('💰 <b>Top Spot Holdings</b>');
+            for (const bal of spotBalances) {
+                lines.push(`<code>${escapeHtml(bal.coin)}</code> | ${formatCurrency(bal.value)}`);
+            }
+        }
+
         lines.push('');
-        lines.push(`#${escapeHtml(candidate.coin)}${escapeHtml(compressedWallet)}`);
+        const hashCoin = candidate.coin.replace(/[^a-zA-Z0-9]/g, '');
+        lines.push(`#${escapeHtml(hashCoin)} ${escapeHtml(compressedWallet)}`);
 
         const hypurrscanUrl = `${this.explorer}/address/${encodeURIComponent(candidate.wallet)}`;
         const hyperdashUrl = `https://app.hyperdash.info/address/${encodeURIComponent(candidate.wallet)}`;
@@ -1518,7 +1534,7 @@ export default class HyperliquidService extends Tracker {
         const { first: firstTimestamp } = getPortfolioTimestamps(context.portfolio);
         const firstDepositAgo = firstTimestamp ? formatTimeAgo(firstTimestamp) : 'Unknown';
 
-        const otherPositions = getTopPositions(context.state.perp!.assetPositions || [], candidate.coin, 5);
+        const otherPositions = getTopPositions(context.state.perp!.assetPositions || [], candidate.coin, 3);
 
         const compressedWallet = `${candidate.wallet.slice(0, 6)}...${candidate.wallet.slice(-4)}`;
 
@@ -1531,7 +1547,7 @@ export default class HyperliquidService extends Tracker {
             `<b>Entry Price:</b> <code>${escapeHtml(entryPrice)}</code>`,
             `<b>Unrealized PnL:</b> <code>${formatCurrency(pnl)}</code>`,
             '',
-            `👤 <b>Whale Profile</b>`,
+            `👤 <b>Whale Profile</b> [${accountTag.tag}]`,
             `<b>Address:</b> <code>${escapeHtml(compressedWallet)}</code>`,
             `<b>First Deposit:</b> ${escapeHtml(firstDepositAgo)}`,
             `<b>Account Value:</b> <code>${formatCurrency(accountTag.totalValue)}</code>`,
@@ -1554,8 +1570,24 @@ export default class HyperliquidService extends Tracker {
             }
         }
 
+        // Top spot holdings
+        const spotBalances = context.state
+            .spot!.balances.filter((b) => parseFloat(b.total) > 0 && b.coin !== 'USDC')
+            .map((b) => ({ coin: b.coin, value: parseFloat(b.px) * parseFloat(b.total) }))
+            .sort((a, b) => b.value - a.value)
+            .slice(0, 3);
+
+        if (spotBalances.length > 0) {
+            lines.push('');
+            lines.push('💰 <b>Top Spot Holdings</b>');
+            for (const bal of spotBalances) {
+                lines.push(`<code>${escapeHtml(bal.coin)}</code> | ${formatCurrency(bal.value)}`);
+            }
+        }
+
         lines.push('');
-        lines.push(`#${escapeHtml(candidate.coin)}${escapeHtml(compressedWallet)}`);
+        const hashCoin = candidate.coin.replace(/[^a-zA-Z0-9]/g, '');
+        lines.push(`#${escapeHtml(hashCoin)} ${escapeHtml(compressedWallet)}`);
 
         const hypurrscanUrl = `${this.explorer}/address/${encodeURIComponent(candidate.wallet)}`;
         const hyperdashUrl = `https://app.hyperdash.info/address/${encodeURIComponent(candidate.wallet)}`;

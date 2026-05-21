@@ -66,7 +66,7 @@ export const config = {
         batchSize: 1000,
         freshWindowMs: parseInt(optionalEnv('HS_FRESH_WINDOW_MS', String(50 * 60 * 60 * 1000)), 10),
         batchFlushIntervalMs: 60 * 1000, // 1 minute
-        cleanupTTLms: 3 * 24 * 60 * 60 * 1000, // 3 days
+        cleanupTTLms: 5 * 24 * 60 * 60 * 1000, // 5 days
         trackedCheckIntervalMs: 30 * 60 * 1000, // 30 minutes
         analyzeIntervalMs: 15 * 60 * 1000 // 15 minutes
     },
@@ -95,7 +95,7 @@ export const config = {
         gammaApiRateLimit: 2,
         batchSize: 50,
         batchFlushIntervalMs: 10 * 1000, // 30 seconds
-        cleanupTTLms: 3 * 24 * 60 * 60 * 1000 // 3 days
+        cleanupTTLms: 5 * 24 * 60 * 60 * 1000 // 5 days
     },
     db: {
         mongodbURI: optionalEnv('MONGODB_URI', 'mongodb://root:example@localhost:27017') as string,
