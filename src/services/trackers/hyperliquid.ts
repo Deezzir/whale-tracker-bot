@@ -65,17 +65,16 @@ export type AlertBranch = 'FRESH_WALLET' | 'WHALE_ACTIVITY' | 'BIG_WHALE' | 'BIG
 export function classifyBranches(coin: string, totalNotional: number, accountTag: AccountTag): AlertBranch[] {
     const branches: AlertBranch[] = [];
     const cfg = config.hyperliquid;
+    const coinUpper = coin.toUpperCase().split('/')[0];
+    const isBtcEth = coinUpper === 'BTC' || coinUpper === 'ETH';
 
     if (totalNotional >= cfg.bigWhaleMinUSD) {
         branches.push('BIG_WHALE');
     }
 
-    if (accountTag.tag === 'FRESH') {
-        const coinUpper = coin.toUpperCase().split('/')[0];
+    if (!isBtcEth && accountTag.tag === 'FRESH') {
         let threshold = cfg.freshMinUSD;
-        if (coinUpper === 'BTC' || coinUpper === 'ETH') {
-            threshold = cfg.freshBtcEthMinUSD;
-        } else if (cfg.mainCoins.some((c) => c.toUpperCase() === coinUpper)) {
+        if (cfg.mainCoins.some((c) => c.toUpperCase() === coinUpper)) {
             threshold = cfg.freshMainCoinMinUSD;
         }
         if (totalNotional >= threshold) {
@@ -83,7 +82,7 @@ export function classifyBranches(coin: string, totalNotional: number, accountTag
         }
     }
 
-    if (accountTag.tag !== 'FRESH' && totalNotional >= cfg.whaleMinUSD) {
+    if (!isBtcEth && accountTag.tag !== 'FRESH' && totalNotional >= cfg.whaleMinUSD) {
         branches.push('WHALE_ACTIVITY');
     }
 
@@ -126,10 +125,10 @@ interface AlertContext {
 export default class HyperliquidService extends Tracker {
     private api = new HyperliquidAPI();
     private explorer = config.hyperliquid.explorer;
-    private mainPerpChannels: ChatChannel[];
-    private otherPerpChannels: ChatChannel[];
-    private otherSpotChannels: ChatChannel[];
-    private mainSpotChannels: ChatChannel[];
+    private freshWalletChannels: ChatChannel[];
+    private whaleActivityChannels: ChatChannel[];
+    private bigWhaleChannels: ChatChannel[];
+    private twapChannels: ChatChannel[];
     private trackChannels: ChatChannel[];
     private sockets: Array<{
         ws: WebSocket | null;
@@ -144,19 +143,19 @@ export default class HyperliquidService extends Tracker {
 
     constructor(
         tg: Tg,
-        mainPerpChannels: ChatChannel[],
-        otherPerpChannels: ChatChannel[],
-        mainSpotChannels: ChatChannel[],
-        otherSpotChannels: ChatChannel[],
+        freshWalletChannels: ChatChannel[],
+        whaleActivityChannels: ChatChannel[],
+        bigWhaleChannels: ChatChannel[],
+        twapChannels: ChatChannel[],
         trackChannels: ChatChannel[],
         useProxy = false,
         useProxyForScreenshots = false
     ) {
-        super(tg, mainPerpChannels, useProxy, useProxyForScreenshots);
-        this.mainPerpChannels = mainPerpChannels;
-        this.otherPerpChannels = otherPerpChannels;
-        this.mainSpotChannels = mainSpotChannels;
-        this.otherSpotChannels = otherSpotChannels;
+        super(tg, [], useProxy, useProxyForScreenshots);
+        this.bigWhaleChannels = bigWhaleChannels;
+        this.freshWalletChannels = freshWalletChannels;
+        this.whaleActivityChannels = whaleActivityChannels;
+        this.twapChannels = twapChannels;
         this.trackChannels = trackChannels;
     }
 
@@ -1058,7 +1057,7 @@ export default class HyperliquidService extends Tracker {
 
         // Use only the highest-priority branch (BIG_WHALE > FRESH_WALLET > WHALE_ACTIVITY)
         const branch = branches[0];
-        const alertChannels = this.getAlertChannels(candidate.coin, candidate.direction);
+        const alertChannels = this.getChannelsForBranch(branch);
 
         const lastAlerts = await HyperliquidDBService.getLastAlerts(
             candidate.wallet,
@@ -1180,7 +1179,7 @@ export default class HyperliquidService extends Tracker {
             `Detected high-value spot trade: ${candidate.wallet} ${candidate.coin} ${formatCurrency(candidate.totalNotional)} (${candidate.direction})`
         );
 
-        const alertChannels = this.getAlertChannels(candidate.coin, candidate.direction);
+        const alertChannels = this.getChannelsForBranch('BIG_TWAP');
         const positionState = state.spot!.balances.find((pos) => pos.coin === candidate.coin.split('/')[0]);
         if (!positionState) {
             this.logger.debug(`Skipping spot (no position): ${candidate.wallet} ${candidate.coin}`);
@@ -1613,21 +1612,16 @@ export default class HyperliquidService extends Tracker {
         return lines.join('\n');
     }
 
-    private getAlertChannels(coin: string, direction: HyperTradeDirection): ChatChannel[] {
-        switch (direction) {
-            case 'long':
-            case 'short': {
-                return config.hyperliquid.mainCoins.some((c) => coin.toLowerCase() === c.toLowerCase())
-                    ? this.mainPerpChannels
-                    : this.otherPerpChannels;
-            }
-            case 'spot': {
-                return config.hyperliquid.mainCoins.some(
-                    (c) => coin.toLowerCase().split('/')[0] === ('u' + c).toLowerCase()
-                )
-                    ? this.mainSpotChannels
-                    : this.otherSpotChannels;
-            }
+    private getChannelsForBranch(branch: AlertBranch): ChatChannel[] {
+        switch (branch) {
+            case 'FRESH_WALLET':
+                return this.freshWalletChannels;
+            case 'WHALE_ACTIVITY':
+                return this.whaleActivityChannels;
+            case 'BIG_WHALE':
+                return this.bigWhaleChannels;
+            case 'BIG_TWAP':
+                return this.twapChannels;
         }
     }
 }

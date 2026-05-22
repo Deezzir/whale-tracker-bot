@@ -8,7 +8,7 @@
 
 ## What It Does
 
-Monitors Hyperliquid perp and spot trade activity, aggregates by wallet/coin/direction, and posts high-value alerts to Telegram topics. Also supports manual wallet tracking workflows.
+Monitors Hyperliquid perp and spot trade activity, aggregates by wallet/coin/direction, and posts high-value alerts to dedicated Telegram channels per branch. Also supports manual wallet tracking workflows.
 
 ## Ingestion
 
@@ -54,8 +54,8 @@ Re-alert only when growth exceeds dynamic threshold:
 `mainCoins` list: BTC, ETH, BNB, XRP, ZEC, DOGE, SOL, HYPE.
 
 Alert destinations:
-- Perps and spot route to separate main/other channel groups.
-- Manual track updates route to dedicated tracking channel(s).
+- Each branch routes to its own dedicated channel (Fresh Wallet, Whale Activity, Big Whale, TWAP).
+- Manual track updates route to dedicated tracking channel.
 
 ## Manual Tracking
 

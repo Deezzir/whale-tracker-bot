@@ -15,9 +15,13 @@ interface SendMessageOptions {
 export default class TelegramService {
     private bot: Telegraf;
     private handlerRegistrar?: (bot: Telegraf) => void;
+    private allChatIDs: number[];
 
     constructor() {
         this.bot = new Telegraf(config.telegram.botToken);
+        this.allChatIDs = Object.entries(config.telegram)
+            .filter(([key, value]) => key.endsWith('ChatID') && typeof value === 'number')
+            .map(([, value]) => value as number);
     }
 
     public registerHandlers(fn: (bot: Telegraf) => void): void {
@@ -66,51 +70,91 @@ export default class TelegramService {
     }
 
     private async sendStartupMessage(): Promise<void> {
-        const STARTUP_MSG_KEY = 'bot:startup_message_id';
+        const STARTUP_MSG_PREFIX = 'bot:startup_message_id:';
         const redis = getRedisClient();
-
-        const oldMsgId = await redis.get(STARTUP_MSG_KEY);
-        if (oldMsgId) {
-            try {
-                await this.bot.telegram.unpinChatMessage(config.telegram.chatID, Number(oldMsgId));
-                await this.bot.telegram.deleteMessage(config.telegram.chatID, Number(oldMsgId));
-            } catch (err) {
-                logger.warn(`Failed to delete old startup message (id=${oldMsgId}): ${err}`);
-            }
-        }
-
         const fmt = (n: number) => `$${n.toLocaleString('en-US')}`;
         const fmtH = (ms: number) => `${Math.round(ms / (60 * 60 * 1000))}h`;
-        const message = [
-            `<b>🟢 Whale Tracker Bot</b>`,
-            ``,
-            `┌─ <b>Polymarket configs</b>`,
-            `  🎰 Regular threshold: <b>${fmt(config.polymarket.alertThresholdUsd)}</b>`,
-            `  ⚽ Sport threshold: <b>${fmt(config.polymarket.sportAlertThresholdUsd)}</b>`,
-            `  📈 Re-alert: <b>+${config.polymarket.minimalGrowthPercent}%</b> of last position`,
-            `  ⏳ Data retention: <b>${config.polymarket.cleanupTTLms / (24 * 60 * 60 * 1000)} days</b>`,
-            `└─`,
-            ``,
-            `┌─ <b>Stake configs</b>`,
-            `  🎰 Minimum bet: <b>${fmt(config.stake.minAlertBetUSD)}</b>`,
-            `  ⏳ Data retention: <b>${config.stake.cleanupTTLms / (24 * 60 * 60 * 1000)} days</b>`,
-            `└─`,
-            ``,
-            `┌─ <b>Hyperliquid configs</b>`,
-            `  🆕 Fresh Wallet: <b>${fmt(config.hyperliquid.freshMinUSD)}</b> (BTC/ETH: ${fmt(config.hyperliquid.freshBtcEthMinUSD)}, Main: ${fmt(config.hyperliquid.freshMainCoinMinUSD)})`,
-            `  🐋 Whale Activity: <b>${fmt(config.hyperliquid.whaleMinUSD)}</b>`,
-            `  🚨 Big Whale: <b>${fmt(config.hyperliquid.bigWhaleMinUSD)}</b>`,
-            `  🔄 TWAP: <b>${fmt(config.hyperliquid.twapOtherMinUSD)}</b> (BTC/ETH: ${fmt(config.hyperliquid.twapBtcEthMinUSD)})`,
-            `  ⏱ Fresh window: <b>${fmtH(config.hyperliquid.freshWindowMs)}</b>`,
-            `  📈 Re-alert: <b>+${config.hyperliquid.minimalGrowthPercent}%</b> of position increase`,
-            `  ⏳ Data retention: <b>${config.hyperliquid.cleanupTTLms / (24 * 60 * 60 * 1000)} days</b>`,
-            `└─`
-        ].join('\n');
 
-        const msgId = await this.sendMessage(config.telegram.chatID, message);
-        await this.bot.telegram.pinChatMessage(config.telegram.chatID, msgId, { disable_notification: true });
-        await redis.set(STARTUP_MSG_KEY, msgId);
-        logger.info('Startup message sent and pinned');
+        const channelMessages: { chatId: number; message: string }[] = [
+            {
+                chatId: config.telegram.hsFreshWalletChatID,
+                message: [
+                    `<b>🟢 Fresh Wallet Channel</b>`,
+                    ``,
+                    `🆕 Threshold: <b>${fmt(config.hyperliquid.freshMinUSD)}</b>`,
+                    `🪙 Main coins (BNB, XRP, DOGE, SOL, ZEC, HYPE): <b>${fmt(config.hyperliquid.freshMainCoinMinUSD)}</b>`,
+                    `⏱ Fresh window: <b>${fmtH(config.hyperliquid.freshWindowMs)}</b>`,
+                    `📈 Re-alert: <b>+${config.hyperliquid.minimalGrowthPercent}%</b>`,
+                    `🚫 Excluded: BTC, ETH`
+                ].join('\n')
+            },
+            {
+                chatId: config.telegram.hsWhaleActivityChatID,
+                message: [
+                    `<b>🟢 Whale Activity Channel</b>`,
+                    ``,
+                    `🐋 Threshold: <b>${fmt(config.hyperliquid.whaleMinUSD)}</b>`,
+                    `📈 Re-alert: <b>+${config.hyperliquid.minimalGrowthPercent}%</b>`,
+                    `🚫 Excluded: BTC, ETH`
+                ].join('\n')
+            },
+            {
+                chatId: config.telegram.hsBigWhaleChatID,
+                message: [
+                    `<b>🟢 Big Whale Channel</b>`,
+                    ``,
+                    `🚨 Threshold: <b>${fmt(config.hyperliquid.bigWhaleMinUSD)}</b>`,
+                    `📈 Re-alert: <b>+${config.hyperliquid.minimalGrowthPercent}%</b>`,
+                    `🪙 All coins`
+                ].join('\n')
+            },
+            {
+                chatId: config.telegram.hsTwapChatID,
+                message: [
+                    `<b>🟢 TWAP Channel</b>`,
+                    ``,
+                    `🔄 BTC/ETH: <b>${fmt(config.hyperliquid.twapBtcEthMinUSD)}</b>`,
+                    `🔄 Others: <b>${fmt(config.hyperliquid.twapOtherMinUSD)}</b>`,
+                    `📈 Re-alert: <b>+${config.hyperliquid.minimalGrowthPercent}%</b>`,
+                    `📋 Min trades: 5 (buy-side only)`
+                ].join('\n')
+            },
+            {
+                chatId: config.telegram.stakeChatID,
+                message: [`<b>🟢 Stake Channel</b>`, ``, `🎰 Min bet: <b>${fmt(config.stake.minAlertBetUSD)}</b>`].join(
+                    '\n'
+                )
+            },
+            {
+                chatId: config.telegram.polyChatID,
+                message: [
+                    `<b>🟢 Polymarket Channel</b>`,
+                    ``,
+                    `🎰 Regular: <b>${fmt(config.polymarket.alertThresholdUsd)}</b>`,
+                    `⚽ Sport: <b>${fmt(config.polymarket.sportAlertThresholdUsd)}</b>`,
+                    `📈 Re-alert: <b>+${config.polymarket.minimalGrowthPercent}%</b>`
+                ].join('\n')
+            }
+        ];
+
+        for (const { chatId, message } of channelMessages) {
+            const redisKey = `${STARTUP_MSG_PREFIX}${chatId}`;
+            const oldMsgId = await redis.get(redisKey);
+            if (oldMsgId) {
+                try {
+                    await this.bot.telegram.unpinChatMessage(chatId, Number(oldMsgId));
+                    await this.bot.telegram.deleteMessage(chatId, Number(oldMsgId));
+                } catch (err) {
+                    logger.warn(`Failed to delete old startup message in ${chatId} (id=${oldMsgId}): ${err}`);
+                }
+            }
+
+            const msgId = await this.sendMessage(chatId, message);
+            await this.bot.telegram.pinChatMessage(chatId, msgId, { disable_notification: true });
+            await redis.set(redisKey, msgId);
+        }
+
+        logger.info('Startup messages sent and pinned to all channels');
     }
 
     public async sendRestartUnhealthyAlert(error?: string): Promise<void> {
@@ -207,8 +251,8 @@ export default class TelegramService {
             await ctx.reply('The bot is only available in the group.');
             return false;
         }
-        if (ctx.chat.id !== config.telegram.chatID) {
-            await ctx.reply('This command can only be used in the target group.');
+        if (!this.allChatIDs.includes(ctx.chat.id)) {
+            await ctx.reply('This command can only be used in the target groups.');
             return false;
         }
         const member = await this.bot.telegram.getChatMember(ctx.chat.id, ctx.from.id);
@@ -227,13 +271,12 @@ export default class TelegramService {
 
     private async ensureBotReady(): Promise<void> {
         const botInfo = await this.bot.telegram.getMe();
-        const member = await this.bot.telegram.getChatMember(config.telegram.chatID, botInfo.id);
-        if (member.status !== 'administrator' && member.status !== 'creator') {
-            throw new Error(`The bot is not an administrator in group ${config.telegram.chatID} `);
-        }
-        const chat = await this.bot.telegram.getChat(config.telegram.chatID);
-        if (chat.type !== 'supergroup') {
-            throw new Error(`The target chat ${config.telegram.chatID} is not a supergroup`);
+
+        for (const chatID of this.allChatIDs) {
+            const member = await this.bot.telegram.getChatMember(chatID, botInfo.id);
+            if (member.status !== 'administrator' && member.status !== 'creator') {
+                throw new Error(`The bot is not an administrator in chat ${chatID}`);
+            }
         }
     }
 }

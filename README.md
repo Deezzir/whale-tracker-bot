@@ -6,14 +6,19 @@ Telegram bot for monitoring high-value activity across:
 - Polymarket trades
 - Stake sports bets
 
-The bot stores data in MongoDB, uses Redis for caching/deduplication, and sends alerts to configured Telegram forum topics. It also supports manual Hyperliquid wallet tracking commands.
+The bot stores data in MongoDB, uses Redis for caching/deduplication, and sends alerts to dedicated Telegram channels (one per alert branch). It also supports manual Hyperliquid wallet tracking commands.
 
 ## Features
 
 - Real-time ingestion from WebSocket/API feeds
-- Threshold-based whale alerts for Hyperliquid, Polymarket, and Stake
-- Re-alerts when tracked positions grow significantly
+- 4-branch Hyperliquid alert system:
+  - **Fresh Wallet** — new wallets (≤50h) opening positions ≥$200K (excl. BTC/ETH)
+  - **Whale Activity** — established wallets with positions ≥$300K (excl. BTC/ETH)
+  - **Big Whale** — any position ≥$1M (all coins)
+  - **Big TWAP** — spot accumulation detection (BTC/ETH ≥$1M, others ≥$300K)
+- Re-alerts when tracked positions grow +9% from last alert
 - Hyperliquid manual tracking commands: `/track`, `/untrack`, `/tracked`, `/stats`
+- Polymarket and Stake whale alerts
 - Optional Screenshots via Puppeteer
 
 ## Requirements
@@ -22,7 +27,7 @@ The bot stores data in MongoDB, uses Redis for caching/deduplication, and sends 
 - MongoDB
 - Redis
 - Telegram bot token
-- Telegram supergroup where the bot is an administrator
+- Telegram channels/groups where the bot is an administrator
 - OpenRouter API key for analysis/classification features
 
 ## Environment
@@ -34,12 +39,13 @@ Create a `.env` file in the project root.
 | Variable | Description |
 | --- | --- |
 | `BOT_TOKEN` | Telegram bot token |
-| `CHAT_ID` | Target Telegram supergroup ID where alerts are posted |
-| `HS_MAIN_TOPIC_ID` | Topic ID for major Hyperliquid alerts |
-| `HS_OTHER_TOPIC_ID` | Topic ID for secondary Hyperliquid alerts |
-| `STAKE_TOPIC_ID` | Topic ID for Stake alerts |
-| `TRACK_TOPIC_ID` | Topic ID for Hyperliquid track notifications |
-| `POLY_TOPIC_ID` | Topic ID for Polymarket alerts |
+| `HS_FRESH_WALLET_CHAT_ID` | Channel ID for Fresh Wallet alerts |
+| `HS_WHALE_ACTIVITY_CHAT_ID` | Channel ID for Whale Activity alerts |
+| `HS_BIG_WHALE_CHAT_ID` | Channel ID for Big Whale alerts |
+| `HS_TWAP_CHAT_ID` | Channel ID for TWAP alerts |
+| `HS_TRACK_CHAT_ID` | Channel ID for tracked wallet notifications |
+| `STAKE_CHAT_ID` | Channel ID for Stake alerts |
+| `POLY_CHAT_ID` | Channel ID for Polymarket alerts |
 | `OWNER_USER_ID` | Telegram user ID used for owner-level checks and watchdog alerts |
 | `OPENROUTER_API_KEY` | OpenRouter API key |
 
@@ -56,10 +62,17 @@ Create a `.env` file in the project root.
 | `DB_ENSURE_INDEXES_ON_START` | `true` | Explicitly runs `createIndexes()` for all models at startup |
 | `REDIS_URL` | `redis://localhost:6379` | Redis connection URL |
 | `REDIS_PASSWORD` | `` | Redis password |
-| `HS_MIN_NOTIONAL_USD` | `250000` | Hyperliquid minimum aggregated notional alert threshold |
+| `HS_MIN_NOTIONAL_USD` | `250000` | Hyperliquid minimum aggregated notional to consider |
 | `HS_AGGREGATION_WINDOW_MS` | `86400000` | Hyperliquid aggregation window |
-| `HS_POS_CHANGE_ALERT_PERCENT` | `20` | Hyperliquid tracked-position re-alert percent |
-| `HS_POS_CHANGE_ALERT_USD` | `50000` | Hyperliquid tracked-position re-alert minimum USD move |
+| `HS_POS_CHANGE_ALERT_PERCENT` | `9` | Re-alert growth threshold (%) |
+| `HS_POS_CHANGE_ALERT_USD` | `50000` | Re-alert minimum USD move |
+| `HS_FRESH_WINDOW_MS` | `180000000` | Fresh wallet time window (50h) |
+| `HS_FRESH_MIN_USD` | `200000` | Fresh wallet min position (other coins) |
+| `HS_FRESH_MAIN_COIN_MIN_USD` | `450000` | Fresh wallet min position (main coins) |
+| `HS_WHALE_MIN_USD` | `300000` | Whale activity min position |
+| `HS_BIG_WHALE_MIN_USD` | `1000000` | Big whale min position |
+| `HS_TWAP_BTC_ETH_MIN_USD` | `1000000` | TWAP min for BTC/ETH |
+| `HS_TWAP_OTHER_MIN_USD` | `300000` | TWAP min for other coins |
 | `STAKE_MIN_BET_USD` | `10000` | Stake minimum bet size for alerts |
 | `POLY_ALERT_THRESHOLD_USD` | `100000` | Polymarket regular market alert threshold |
 | `POLY_SPORT_BET_ALERT_THRESHOLD_USD` | `500000` | Polymarket sport market alert threshold |
@@ -108,4 +121,4 @@ This starts MongoDB, Redis, and the bot container.
 - `/track <wallet> <coin> <long|short>`: Add a tracked Hyperliquid position
 - `/untrack <wallet> <coin> <long|short>`: Remove a tracked Hyperliquid position
 
-Commands are restricted to the configured group and require admin/owner permissions.
+Commands are restricted to the configured channels and require admin/owner permissions.

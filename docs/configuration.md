@@ -11,14 +11,13 @@ If this document and `README.md` disagree, follow `src/config.ts`.
 These are required at startup (`requireEnv(...)` in `src/config.ts`):
 
 - `BOT_TOKEN`
-- `CHAT_ID`
-- `HS_MAIN_PERPS_TOPIC_ID`
-- `HS_OTHER_PERPS_TOPIC_ID`
-- `HS_MAIN_SPOT_TOPIC_ID`
-- `HS_OTHER_SPOT_TOPIC_ID`
-- `STAKE_TOPIC_ID`
-- `TRACK_TOPIC_ID`
-- `POLY_TOPIC_ID`
+- `HS_FRESH_WALLET_CHAT_ID`
+- `HS_WHALE_ACTIVITY_CHAT_ID`
+- `HS_BIG_WHALE_CHAT_ID`
+- `HS_TWAP_CHAT_ID`
+- `HS_TRACK_CHAT_ID`
+- `STAKE_CHAT_ID`
+- `POLY_CHAT_ID`
 - `OWNER_USER_ID`
 - `OPENROUTER_API_KEY`
 
@@ -54,13 +53,14 @@ Hyperliquid:
 |----------|---------|-------------|
 | `HS_FRESH_WINDOW_MS` | `180000000` (50h) | Time window to consider a wallet "fresh" |
 | `HS_FRESH_MIN_USD` | `200000` | Min position for fresh wallet alert (other coins) |
-| `HS_FRESH_MAIN_COIN_MIN_USD` | `450000` | Min position for fresh wallet alert (main coins) |
-| `HS_FRESH_BTC_ETH_MIN_USD` | `2000000` | Min position for fresh wallet alert (BTC/ETH) |
-| `HS_WHALE_MIN_USD` | `300000` | Min position for whale activity alert (all coins) |
+| `HS_FRESH_MAIN_COIN_MIN_USD` | `450000` | Min position for fresh wallet alert (main coins: BNB, XRP, DOGE, SOL, ZEC, HYPE) |
+| `HS_WHALE_MIN_USD` | `300000` | Min position for whale activity alert (excl. BTC/ETH) |
 | `HS_BIG_WHALE_MIN_USD` | `1000000` | Min position for big whale alert (all coins) |
 | `HS_TWAP_BTC_ETH_MIN_USD` | `1000000` | Min accumulation for TWAP alert (BTC/ETH) |
 | `HS_TWAP_OTHER_MIN_USD` | `300000` | Min accumulation for TWAP alert (other coins) |
 | `HS_POS_CHANGE_ALERT_PERCENT` | `9` | Re-alert growth threshold (%) |
+
+Note: Fresh Wallet and Whale Activity branches exclude BTC and ETH entirely.
 
 Polymarket:
 
@@ -89,21 +89,19 @@ OpenRouter:
 - `OPENROUTER_CLASSIFIER_PROMPT_TEMPLATE_PATH`
 - `OPENROUTER_FAST_MODEL`
 
-## Important Naming Drift
+## Channel Routing
 
-Legacy docs/examples may still reference:
+Each alert branch routes to its own dedicated Telegram channel (no topics):
 
-- `HS_MAIN_TOPIC_ID`
-- `HS_OTHER_TOPIC_ID`
-
-Current code expects split topic keys:
-
-- `HS_MAIN_PERPS_TOPIC_ID`
-- `HS_OTHER_PERPS_TOPIC_ID`
-- `HS_MAIN_SPOT_TOPIC_ID`
-- `HS_OTHER_SPOT_TOPIC_ID`
-
-Using legacy names will fail startup because required vars are missing.
+| Branch | Env Variable |
+|--------|-------------|
+| Fresh Wallet | `HS_FRESH_WALLET_CHAT_ID` |
+| Whale Activity | `HS_WHALE_ACTIVITY_CHAT_ID` |
+| Big Whale | `HS_BIG_WHALE_CHAT_ID` |
+| Big TWAP | `HS_TWAP_CHAT_ID` |
+| Tracked Wallets | `HS_TRACK_CHAT_ID` |
+| Stake | `STAKE_CHAT_ID` |
+| Polymarket | `POLY_CHAT_ID` |
 
 ## Configuration Ownership Map
 

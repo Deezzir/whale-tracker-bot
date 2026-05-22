@@ -14,17 +14,14 @@ const logger = new Logger('Main');
 const telegram: Tg = new Tg();
 const hl = new HyperliquidService(
     telegram,
-    [{ chatId: config.telegram.chatID, topicId: config.telegram.hsMainPerpsTopicID }],
-    [{ chatId: config.telegram.chatID, topicId: config.telegram.hsOtherPerpsTopicID }],
-    [{ chatId: config.telegram.chatID, topicId: config.telegram.hsMainSpotTopicID }],
-    [{ chatId: config.telegram.chatID, topicId: config.telegram.hsOtherSpotTopicID }],
-    [{ chatId: config.telegram.chatID, topicId: config.telegram.trackTopicID }]
+    [{ chatId: config.telegram.hsFreshWalletChatID }],
+    [{ chatId: config.telegram.hsWhaleActivityChatID }],
+    [{ chatId: config.telegram.hsBigWhaleChatID }],
+    [{ chatId: config.telegram.hsTwapChatID }],
+    [{ chatId: config.telegram.hsTrackChatID }]
 );
-const stake = new StakeService(telegram, [{ chatId: config.telegram.chatID, topicId: config.telegram.stakeTopicID }]);
-const poly = new PolymarketService(telegram, [
-    { chatId: config.telegram.chatID, topicId: config.telegram.polyTopicID },
-    { chatId: -1003468238602, topicId: 10961 }
-]);
+const stake = new StakeService(telegram, [{ chatId: config.telegram.stakeChatID }]);
+const poly = new PolymarketService(telegram, [{ chatId: config.telegram.polyChatID }]);
 const services: Tracker[] = [hl, stake, poly];
 const healthServer = new HealthService(config.healthServerPort, services);
 
@@ -124,7 +121,7 @@ telegram.registerHandlers((bot) => {
         await ctx.answerCbQuery();
         await ctx.reply(msg, { parse_mode: 'HTML' });
         if (buttons) await ctx.editMessageReplyMarkup(buttons);
-        await telegram.sendMessage(config.telegram.chatID, msg, { message_thread_id: config.telegram.trackTopicID });
+        await telegram.sendMessage(config.telegram.hsTrackChatID, msg);
     });
 
     bot.action(/^untrack:(.+)$/, async (ctx) => {
