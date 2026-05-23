@@ -46,6 +46,7 @@ export const config = {
         scanStallTimeoutMs: 5 * 60 * 1000 // 5 minutes
     },
     hyperliquid: {
+        excludeDexes: process.env['HS_EXCLUDE_DEXES'] ? process.env['HS_EXCLUDE_DEXES'].split(',').map((d) => d.trim()) : [],
         minNotionalUSD: parseFloat(optionalEnv('HS_MIN_NOTIONAL_USD', '250000')),
         minSpotNotionalUSD: parseFloat(optionalEnv('HS_MIN_SPOT_NOTIONAL_USD', '300000')),
         aggregationWindowMs: parseInt(optionalEnv('HS_AGGREGATION_WINDOW_MS', String(3 * 24 * 60 * 60 * 1000)), 10),
@@ -60,7 +61,8 @@ export const config = {
         twapOtherMinUSD: parseFloat(optionalEnv('HS_TWAP_OTHER_MIN_USD', '300000')),
         wss: 'wss://api.hyperliquid.xyz/ws',
         api: 'https://api.hyperliquid.xyz/info',
-        explorer: 'https://hypurrscan.io',
+        hypurrscanExplorer: 'https://hypurrscan.io',
+        hyperdashExplorer: 'https://hyperdash.com',
         batchSize: 1000,
         freshWindowMs: parseInt(optionalEnv('HS_FRESH_WINDOW_MS', String(50 * 60 * 60 * 1000)), 10),
         batchFlushIntervalMs: 60 * 1000, // 1 minute

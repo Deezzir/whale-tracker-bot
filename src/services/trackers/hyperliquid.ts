@@ -124,7 +124,8 @@ interface AlertContext {
 
 export default class HyperliquidService extends Tracker {
     private api = new HyperliquidAPI();
-    private explorer = config.hyperliquid.explorer;
+    private hypurrscanExplorer = config.hyperliquid.hypurrscanExplorer;
+    private hyperdashExplorer = config.hyperliquid.hyperdashExplorer;
     private freshWalletChannels: ChatChannel[];
     private whaleActivityChannels: ChatChannel[];
     private bigWhaleChannels: ChatChannel[];
@@ -164,7 +165,7 @@ export default class HyperliquidService extends Tracker {
         this.running = true;
         this.logger.info('Monitoring started');
 
-        const perpNames = await this.api.fetchCoins();
+        const perpNames = await this.api.fetchCoins(config.hyperliquid.excludeDexes);
         if (perpNames.length === 0) throw new Error('Failed to fetch coin list from Hyperliquid API');
 
         const spotPairs = await this.api.fetchSpotCoins();
@@ -269,7 +270,7 @@ export default class HyperliquidService extends Tracker {
                     [
                         {
                             text: '🔗 View on Hypurrscan',
-                            url: `${this.explorer}/address/${encodeURIComponent(trade.wallet)}`
+                            url: `${this.hypurrscanExplorer}/address/${encodeURIComponent(trade.wallet)}`
                         }
                     ]
                 ]
@@ -317,7 +318,7 @@ export default class HyperliquidService extends Tracker {
                         [
                             {
                                 text: '🔗 View on Hypurrscan',
-                                url: `${this.explorer}/address/${encodeURIComponent(deleted.wallet)}`
+                                url: `${this.hypurrscanExplorer}/address/${encodeURIComponent(deleted.wallet)}`
                             }
                         ]
                     ]
@@ -347,7 +348,7 @@ export default class HyperliquidService extends Tracker {
             for (const tracked of trackedWallets) {
                 const compressedWallet = `${tracked.wallet.slice(0, 6)}...${tracked.wallet.slice(-4)}`;
                 const directionIcon = tracked.direction === 'long' ? '🟢' : '🔴';
-                const href = `${this.explorer}/address/${encodeURIComponent(tracked.wallet)}`;
+                const href = `${this.hypurrscanExplorer}/address/${encodeURIComponent(tracked.wallet)}`;
                 lines.push(`<b>Wallet</b> <a href="${href}">${escapeHtml(compressedWallet)}</a>`);
                 lines.push(`<b>Coin:</b> ${directionIcon} <code>${tracked.coin.toUpperCase()}</code>`);
                 lines.push(`<b>Size:</b> <code>$${tracked.totalNotional.toLocaleString()}</code>`);
@@ -426,19 +427,19 @@ export default class HyperliquidService extends Tracker {
         const perpCandidates =
             perpKeys.length > 0
                 ? await HyperliquidDBService.getTradesToAlert(
-                      perpKeys,
-                      config.hyperliquid.minNotionalUSD,
-                      config.hyperliquid.aggregationWindowMs
-                  )
+                    perpKeys,
+                    config.hyperliquid.minNotionalUSD,
+                    config.hyperliquid.aggregationWindowMs
+                )
                 : [];
 
         const spotCandidates =
             spotKeys.length > 0
                 ? await HyperliquidDBService.getTradesToAlert(
-                      spotKeys,
-                      config.hyperliquid.minSpotNotionalUSD,
-                      config.hyperliquid.aggregationWindowMs
-                  )
+                    spotKeys,
+                    config.hyperliquid.minSpotNotionalUSD,
+                    config.hyperliquid.aggregationWindowMs
+                )
                 : [];
 
         const candidates = [...perpCandidates, ...spotCandidates];
@@ -904,7 +905,7 @@ export default class HyperliquidService extends Tracker {
                 [
                     {
                         text: '🔗 View on Hypurrscan',
-                        url: `${this.explorer}/address/${encodeURIComponent(wallet)}`
+                        url: `${this.hypurrscanExplorer}/address/${encodeURIComponent(wallet)}`
                     }
                 ],
                 reason !== 'closed' && reason !== 'liquidated'
@@ -1125,7 +1126,7 @@ export default class HyperliquidService extends Tracker {
         let screenshot: Buffer | null = null;
         if (config.puppeteer.screenshotEnabled) {
             screenshot = await this.screenshoter.capture(
-                `${this.explorer}/address/${candidate.wallet}#perps`,
+                `${this.hypurrscanExplorer}/address/${candidate.wallet}#perps`,
                 undefined,
                 () => {
                     const result = document.evaluate(
@@ -1272,7 +1273,7 @@ export default class HyperliquidService extends Tracker {
         let screenshot: Buffer | null = null;
         if (config.puppeteer.screenshotEnabled) {
             screenshot = await this.screenshoter.capture(
-                `${this.explorer}/address/${candidate.wallet}#spot`,
+                `${this.hypurrscanExplorer}/address/${candidate.wallet}#spot`,
                 undefined,
                 () => {
                     const result = document.evaluate(
@@ -1486,8 +1487,8 @@ export default class HyperliquidService extends Tracker {
         const hashCoin = candidate.coin.replace(/[^a-zA-Z0-9]/g, '');
         lines.push(`#${escapeHtml(hashCoin)}_${candidate.wallet.slice(2, 6)}${candidate.wallet.slice(-4)}`);
 
-        const hypurrscanUrl = `${this.explorer}/address/${encodeURIComponent(candidate.wallet)}`;
-        const hyperdashUrl = `https://hyperdash.com/address/${encodeURIComponent(candidate.wallet)}`;
+        const hypurrscanUrl = `${this.hypurrscanExplorer}/address/${encodeURIComponent(candidate.wallet)}`;
+        const hyperdashUrl = `${this.hyperdashExplorer}/address/${encodeURIComponent(candidate.wallet)}`;
 
         return {
             msg: lines.join('\n'),
@@ -1586,7 +1587,7 @@ export default class HyperliquidService extends Tracker {
         const hashCoin = candidate.coin.replace(/[^a-zA-Z0-9]/g, '');
         lines.push(`#${escapeHtml(hashCoin)}_${candidate.wallet.slice(2, 6)}${candidate.wallet.slice(-4)}`);
 
-        const hypurrscanUrl = `${this.explorer}/address/${encodeURIComponent(candidate.wallet)}`;
+        const hypurrscanUrl = `${this.hypurrscanExplorer}/address/${encodeURIComponent(candidate.wallet)}`;
         const hyperdashUrl = `https://hyperdash.com/address/${encodeURIComponent(candidate.wallet)}`;
 
         return {

@@ -315,7 +315,7 @@ export default class HyperliquidAPI {
         return { spot, perp };
     }
 
-    public async fetchCoins(): Promise<string[]> {
+    public async fetchCoins(excludeDexes: string[]): Promise<string[]> {
         const cacheKey = 'hs:perp-coins-all';
 
         const cached = await this.redis.get(cacheKey);
@@ -327,6 +327,7 @@ export default class HyperliquidAPI {
 
             const coins: string[] = [];
             for (const dex of dexes) {
+                if (excludeDexes.includes(dex?.name || 'main')) continue;
                 const dexMeta = await this.fetchPerpMeta(dex?.name);
                 if (!dexMeta) throw new Error(`Failed to fetch perp meta for dex ${dex?.name} from Hyperliquid API`);
                 const current = dexMeta.universe.map((u: { name: string }) => u.name);
