@@ -20,6 +20,8 @@ These are required at startup (`requireEnv(...)` in `src/config.ts`):
 - `POLY_CHAT_ID`
 - `OWNER_USER_ID`
 - `OPENROUTER_API_KEY`
+- `COINGLASS_API_KEY`
+- `COINGLASS_CHAT_ID`
 
 ## Optional Environment Variables (Selected)
 
@@ -89,6 +91,28 @@ OpenRouter:
 - `OPENROUTER_CLASSIFIER_PROMPT_TEMPLATE_PATH`
 - `OPENROUTER_FAST_MODEL`
 
+CoinGlass OI Anomaly Tracker:
+
+- `COINGLASS_EXCHANGES` (default: `Binance,OKX,Bybit`)
+- `COINGLASS_REFRESH_INTERVAL_MS` (default: `3600000` / 1h)
+- `COINGLASS_BLACKLIST` (default: empty — comma-separated tokens to exclude from detection)
+- `COINGLASS_WARMUP_CONCURRENCY` (default: `5` — parallel warmup batch size)
+
+### CoinGlass Detection Parameters (hardcoded in config.ts)
+
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| Scan interval | 30 min | Evaluation frequency per pair |
+| EWMA lookback | 96 intervals (48h) | Window for mean/variance |
+| EWMA α | ~0.02062 | Decay factor |
+| Fast spike (z) | > 4 | Single-interval robust z-score → HIGH |
+| Slow accumulation (Σz) | > 6 | Cumulative z over 4 candles → HIGH |
+| CUSUM threshold | > 8 | Sustained build → CRITICAL |
+| CUSUM drift k | 1 | Sensitivity parameter |
+| Stealth price | ≤ 2% | Price move to flag stealth positioning |
+| Warmup | 96 candles | Before pair can alert |
+| Cooldown | 6 hours | Per-pair suppression |
+
 ## Channel Routing
 
 Each alert branch routes to its own dedicated Telegram channel (no topics):
@@ -102,6 +126,7 @@ Each alert branch routes to its own dedicated Telegram channel (no topics):
 | Tracked Wallets | `HS_TRACK_CHAT_ID` |
 | Stake | `STAKE_CHAT_ID` |
 | Polymarket | `POLY_CHAT_ID` |
+| CoinGlass OI | `COINGLASS_CHAT_ID` |
 
 ## Configuration Ownership Map
 
@@ -112,6 +137,7 @@ Each alert branch routes to its own dedicated Telegram channel (no topics):
   - `src/services/trackers/hyperliquid.ts`
   - `src/services/trackers/polymarket.ts`
   - `src/services/trackers/stake.ts`
+  - `src/services/trackers/coinglass.ts`
 
 ## Operational Guidance
 

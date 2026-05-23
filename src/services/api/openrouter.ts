@@ -34,7 +34,7 @@ const CLASSIFICATION_SCHEMA = {
     additionalProperties: false
 };
 
-class OpenRouterService {
+export default class OpenRouterAPI {
     private client: OpenRouter;
     private fastModel = config.openRouter.fastModel;
     private classificationPromptTemplate;
@@ -80,5 +80,3 @@ class OpenRouterService {
         }
     }
 }
-
-export default new OpenRouterService();

@@ -1,6 +1,7 @@
 import HyperliquidDBService, { HyperTradeDirection } from './hyperliquid';
 import StakeDBService from './stake';
 import PolymarketDBService from './polymarket';
+import CoinglassDBService from './coinglass';
 import { config, Environment } from '../../config';
 import mongoose from 'mongoose';
 import Logger from '../../common/logger';
@@ -48,4 +49,4 @@ async function closeDB() {
 }
 
 export type { HyperTradeDirection };
-export { HyperliquidDBService, StakeDBService, PolymarketDBService, connectDB, closeDB };
+export { HyperliquidDBService, StakeDBService, PolymarketDBService, CoinglassDBService, connectDB, closeDB };

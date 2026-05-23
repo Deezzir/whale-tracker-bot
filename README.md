@@ -5,6 +5,7 @@ Telegram bot for monitoring high-value activity across:
 - Hyperliquid perp trades
 - Polymarket trades
 - Stake sports bets
+- CoinGlass exchange OI anomalies (statistical detection)
 
 The bot stores data in MongoDB, uses Redis for caching/deduplication, and sends alerts to dedicated Telegram channels (one per alert branch). It also supports manual Hyperliquid wallet tracking commands.
 
@@ -19,6 +20,7 @@ The bot stores data in MongoDB, uses Redis for caching/deduplication, and sends 
 - Re-alerts when tracked positions grow +9% from last alert
 - Hyperliquid manual tracking commands: `/track`, `/untrack`, `/tracked`, `/stats`
 - Polymarket and Stake whale alerts
+- CoinGlass OI anomaly detection (EWMA/CUSUM/MAD statistical methods, per-exchange)
 - Optional Screenshots via Puppeteer
 
 ## Requirements
@@ -29,6 +31,7 @@ The bot stores data in MongoDB, uses Redis for caching/deduplication, and sends 
 - Telegram bot token
 - Telegram channels/groups where the bot is an administrator
 - OpenRouter API key for analysis/classification features
+- CoinGlass API key (STARTUP plan, 30m OI history)
 
 ## Environment
 
@@ -48,6 +51,8 @@ Create a `.env` file in the project root.
 | `POLY_CHAT_ID` | Channel ID for Polymarket alerts |
 | `OWNER_USER_ID` | Telegram user ID used for owner-level checks and watchdog alerts |
 | `OPENROUTER_API_KEY` | OpenRouter API key |
+| `COINGLASS_API_KEY` | CoinGlass API key (STARTUP plan) |
+| `COINGLASS_CHAT_ID` | Channel ID for CoinGlass OI anomaly alerts |
 
 ### Optional (with defaults)
 
@@ -87,6 +92,10 @@ Create a `.env` file in the project root.
 | `PUPPETEER_PROXIES` | `` | Comma-separated proxy list |
 | `OPENROUTER_CLASSIFIER_PROMPT_TEMPLATE_PATH` | `./resources/trade_classifier_prompt.txt` | Prompt template path |
 | `OPENROUTER_FAST_MODEL` | `gpt-3.5-turbo` | OpenRouter model used for fast classification |
+| `COINGLASS_EXCHANGES` | `Binance,OKX,Bybit` | Comma-separated exchanges to monitor |
+| `COINGLASS_REFRESH_INTERVAL_MS` | `3600000` | Token universe refresh interval (1h) |
+| `COINGLASS_BLACKLIST` | `` | Comma-separated tokens to exclude from OI detection |
+| `COINGLASS_WARMUP_CONCURRENCY` | `5` | Parallel warmup batch size |
 
 ## Run locally
 
@@ -111,6 +120,7 @@ This starts MongoDB, Redis, and the bot container.
   - `docs/components/hyperliquid.md`
   - `docs/components/polymarket.md`
   - `docs/components/stake.md`
+  - `docs/components/coinglass.md`
 - Configuration: `docs/configuration.md`
 - Operations runbook: `docs/operations.md`
 

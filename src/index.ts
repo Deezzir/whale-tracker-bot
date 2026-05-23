@@ -1,6 +1,12 @@
 import Logger from './common/logger';
 import { connectDB, closeDB } from './services/db';
-import { HyperliquidService, StakeService, PolymarketService } from './services/trackers';
+import {
+    HyperliquidService,
+    StakeService,
+    PolymarketService,
+    CoinglassService,
+    trackerNames
+} from './services/trackers';
 import Tg from './services/telegram';
 import { closeRedis, connectRedis } from './services/redis';
 import { Tracker } from './common/tracker';
@@ -12,18 +18,51 @@ import HealthService from './healthz';
 
 const logger = new Logger('Main');
 const telegram: Tg = new Tg();
-const hl = new HyperliquidService(
-    telegram,
-    [{ chatId: config.telegram.hsFreshWalletChatID }],
-    [{ chatId: config.telegram.hsWhaleActivityChatID }],
-    [{ chatId: config.telegram.hsBigWhaleChatID }],
-    [{ chatId: config.telegram.hsTwapChatID }],
-    [{ chatId: config.telegram.hsTrackChatID }]
-);
-const stake = new StakeService(telegram, [{ chatId: config.telegram.stakeChatID }]);
-const poly = new PolymarketService(telegram, [{ chatId: config.telegram.polyChatID }]);
-const services: Tracker[] = [hl, stake, poly];
+const services: Tracker[] = getEnabledTrackers();
 const healthServer = new HealthService(config.healthServerPort, services);
+
+function getEnabledTrackers(): Tracker[] {
+    if (config.trackers.length === 0)
+        throw new Error('At least one tracker must be enabled via ENABLED_TRACKERS env variable');
+    if (config.trackers.some((t) => !trackerNames.map((n) => n.name).includes(t)))
+        throw new Error(
+            `Invalid tracker name in ENABLED_TRACKERS. Valid options: ${[...trackerNames.map((n) => n.name)].join(', ')}`
+        );
+
+    const services: Tracker[] = [];
+
+    for (const trackerConfig of trackerNames) {
+        if (config.trackers.includes(trackerConfig.name)) {
+            logger.info(`Enabling tracker: ${trackerConfig.fullName}`);
+            switch (trackerConfig.fullName) {
+                case HyperliquidService.name:
+                    services.push(
+                        new HyperliquidService(
+                            telegram,
+                            [{ chatId: config.telegram.hsFreshWalletChatID }],
+                            [{ chatId: config.telegram.hsWhaleActivityChatID }],
+                            [{ chatId: config.telegram.hsBigWhaleChatID }],
+                            [{ chatId: config.telegram.hsTwapChatID }],
+                            [{ chatId: config.telegram.hsTrackChatID }]
+                        )
+                    );
+                    break;
+                case StakeService.name:
+                    services.push(new StakeService(telegram, [{ chatId: config.telegram.stakeChatID }]));
+                    break;
+                case PolymarketService.name:
+                    services.push(new PolymarketService(telegram, [{ chatId: config.telegram.polyChatID }]));
+                    break;
+                case CoinglassService.name:
+                    services.push(new CoinglassService(telegram, [{ chatId: config.telegram.coinglassChatId }]));
+                    break;
+                default:
+                    logger.warn(`Unknown tracker name: ${trackerConfig.fullName}`);
+            }
+        }
+    }
+    return services;
+}
 
 async function extractTrackData(
     ctx: (Context & { match: RegExpMatchArray | null }) | (Context & { args: string[] }),
@@ -71,6 +110,12 @@ async function extractTrackData(
 }
 
 telegram.registerHandlers((bot) => {
+    const hl = services.find((s) => s instanceof HyperliquidService) as HyperliquidService | undefined;
+    if (!hl) {
+        logger.warn('HyperliquidService is not enabled, /track and /untrack commands will be unavailable');
+        return;
+    }
+
     bot.command('stats', async (ctx) => {
         if (!(await telegram.checkMessageSource(ctx, false))) return;
         const args = ctx.args;

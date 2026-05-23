@@ -175,7 +175,7 @@ export default class StakeService extends Tracker {
     async start(): Promise<void> {
         if (this.running) return;
         this.running = true;
-        this.logger.info('StakeServivce monitoring started');
+        this.logger.info('StakeService monitoring started');
 
         try {
             this.browser = await this.initBrowser();

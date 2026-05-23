@@ -27,6 +27,7 @@ export const config = {
     logFileEnabled: optionalEnv('LOG_FILE_ENABLED', 'false') === 'true',
     healthServerPort: parseInt(optionalEnv('HEALTH_SERVER_PORT', '9988'), 10),
     logLevel: optionalEnv('LOG_LEVEL', 'INFO'),
+    trackers: process.env['ENABLED_TRACKERS'] ? process.env['ENABLED_TRACKERS'].split(',').map((t) => t.trim()) : [],
     telegram: {
         botToken: requireEnv('BOT_TOKEN'),
         hsTwapChatID: parseInt(requireEnv('HS_TWAP_CHAT_ID'), 10),
@@ -35,6 +36,7 @@ export const config = {
         hsFreshWalletChatID: parseInt(requireEnv('HS_FRESH_WALLET_CHAT_ID'), 10),
         hsWhaleActivityChatID: parseInt(requireEnv('HS_WHALE_ACTIVITY_CHAT_ID'), 10),
         stakeChatID: parseInt(requireEnv('STAKE_CHAT_ID'), 10),
+        coinglassChatId: parseInt(requireEnv('COINGLASS_CHAT_ID'), 10),
         polyChatID: parseInt(requireEnv('POLY_CHAT_ID'), 10),
         ownerUserID: parseInt(requireEnv('OWNER_USER_ID'), 10)
     },
@@ -46,7 +48,9 @@ export const config = {
         scanStallTimeoutMs: 5 * 60 * 1000 // 5 minutes
     },
     hyperliquid: {
-        excludeDexes: process.env['HS_EXCLUDE_DEXES'] ? process.env['HS_EXCLUDE_DEXES'].split(',').map((d) => d.trim()) : [],
+        excludeDexes: process.env['HS_EXCLUDE_DEXES']
+            ? process.env['HS_EXCLUDE_DEXES'].split(',').map((d) => d.trim())
+            : [],
         minNotionalUSD: parseFloat(optionalEnv('HS_MIN_NOTIONAL_USD', '250000')),
         minSpotNotionalUSD: parseFloat(optionalEnv('HS_MIN_SPOT_NOTIONAL_USD', '300000')),
         aggregationWindowMs: parseInt(optionalEnv('HS_AGGREGATION_WINDOW_MS', String(3 * 24 * 60 * 60 * 1000)), 10),
@@ -122,5 +126,30 @@ export const config = {
             `${ASSETS_PATH}/trade_classifier_prompt.txt`
         ) as string,
         fastModel: optionalEnv('OPENROUTER_FAST_MODEL', 'gpt-3.5-turbo') as string
+    },
+    coinglass: {
+        apiKey: requireEnv('COINGLASS_API_KEY') as string,
+        api: 'https://open-api-v4.coinglass.com',
+        exchanges: (process.env['COINGLASS_EXCHANGES'] || 'Hyperliquid,Aster,Gate,Bybit,Binance,OKX,Kraken')
+            .split(',')
+            .map((e) => e.trim()),
+        blacklist: process.env['COINGLASS_BLACKLIST']
+            ? process.env['COINGLASS_BLACKLIST'].split(',').map((t) => t.trim().toUpperCase())
+            : [],
+        warmupConcurrency: parseInt(optionalEnv('COINGLASS_WARMUP_CONCURRENCY', '5'), 10),
+        cooldownSeconds: 21600, // 6 hours
+        ewmaLookback: 96, // 48 hours of 30m candles
+        ewmaAlpha: 2 / (96 + 1), // ~0.02062
+        zScoreThreshold: 4, // fast spike → HIGH
+        cumulativeZThreshold: 6, // slow accumulation over 4 candles → HIGH
+        cumulativeZWindow: 4, // candles for cumulative z
+        cusumThreshold: 8, // sustained build → CRITICAL
+        cusumDrift: 1, // CUSUM drift parameter k
+        stealthPriceThreshold: 2, // <=2% price move = stealth positioning
+        warmupCandles: 96, // minimum candles before alerting
+        refreshIntervalMs: parseInt(optionalEnv('COINGLASS_REFRESH_INTERVAL_MS', '3600000'), 10),
+        intervalMs: 30 * 60 * 1000, // 30 minutes
+        noDataTimeoutMs: 60 * 60 * 1000, // 1 hour
+        scanStallTimeoutMs: 60 * 60 * 1000 // 1 hour
     }
 } as const;

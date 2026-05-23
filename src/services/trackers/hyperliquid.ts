@@ -427,19 +427,19 @@ export default class HyperliquidService extends Tracker {
         const perpCandidates =
             perpKeys.length > 0
                 ? await HyperliquidDBService.getTradesToAlert(
-                    perpKeys,
-                    config.hyperliquid.minNotionalUSD,
-                    config.hyperliquid.aggregationWindowMs
-                )
+                      perpKeys,
+                      config.hyperliquid.minNotionalUSD,
+                      config.hyperliquid.aggregationWindowMs
+                  )
                 : [];
 
         const spotCandidates =
             spotKeys.length > 0
                 ? await HyperliquidDBService.getTradesToAlert(
-                    spotKeys,
-                    config.hyperliquid.minSpotNotionalUSD,
-                    config.hyperliquid.aggregationWindowMs
-                )
+                      spotKeys,
+                      config.hyperliquid.minSpotNotionalUSD,
+                      config.hyperliquid.aggregationWindowMs
+                  )
                 : [];
 
         const candidates = [...perpCandidates, ...spotCandidates];

@@ -4,6 +4,7 @@ import Logger from '../common/logger';
 import { InlineKeyboardMarkup, InputFile } from 'telegraf/types';
 import { getRedisClient } from './redis';
 import { retry } from '../common/retrier';
+import { HyperliquidService, StakeService, PolymarketService, CoinglassService, trackerNames } from './trackers';
 
 const logger = new Logger('Telegram');
 
@@ -75,8 +76,9 @@ export default class TelegramService {
         const fmt = (n: number) => `$${n.toLocaleString('en-US')}`;
         const fmtH = (ms: number) => `${Math.round(ms / (60 * 60 * 1000))}h`;
 
-        const channelMessages: { chatId: number; message: string }[] = [
+        const channelMessages: { chatId: number; message: string; tracker: string }[] = [
             {
+                tracker: HyperliquidService.name,
                 chatId: config.telegram.hsFreshWalletChatID,
                 message: [
                     `<b>🟢 Fresh Wallet Channel</b>`,
@@ -89,6 +91,7 @@ export default class TelegramService {
                 ].join('\n')
             },
             {
+                tracker: HyperliquidService.name,
                 chatId: config.telegram.hsWhaleActivityChatID,
                 message: [
                     `<b>🟢 Whale Activity Channel</b>`,
@@ -99,6 +102,7 @@ export default class TelegramService {
                 ].join('\n')
             },
             {
+                tracker: HyperliquidService.name,
                 chatId: config.telegram.hsBigWhaleChatID,
                 message: [
                     `<b>🟢 Big Whale Channel</b>`,
@@ -109,6 +113,7 @@ export default class TelegramService {
                 ].join('\n')
             },
             {
+                tracker: HyperliquidService.name,
                 chatId: config.telegram.hsTwapChatID,
                 message: [
                     `<b>🟢 TWAP Channel</b>`,
@@ -120,12 +125,14 @@ export default class TelegramService {
                 ].join('\n')
             },
             {
+                tracker: StakeService.name,
                 chatId: config.telegram.stakeChatID,
                 message: [`<b>🟢 Stake Channel</b>`, ``, `🎰 Min bet: <b>${fmt(config.stake.minAlertBetUSD)}</b>`].join(
                     '\n'
                 )
             },
             {
+                tracker: PolymarketService.name,
                 chatId: config.telegram.polyChatID,
                 message: [
                     `<b>🟢 Polymarket Channel</b>`,
@@ -134,10 +141,31 @@ export default class TelegramService {
                     `⚽ Sport: <b>${fmt(config.polymarket.sportAlertThresholdUsd)}</b>`,
                     `📈 Re-alert: <b>+${config.polymarket.minimalGrowthPercent}%</b>`
                 ].join('\n')
+            },
+            {
+                tracker: CoinglassService.name,
+                chatId: config.telegram.coinglassChatId,
+                message: [
+                    `<b>🟢 CoinGlass OI Anomaly Channel</b>`,
+                    ``,
+                    `📊 Exchanges: <b>${config.coinglass.exchanges.join(', ')}</b>`,
+                    `⚡ Fast Spike: z > <b>${config.coinglass.zScoreThreshold}</b>`,
+                    `📈 Slow Accumulation: Σz > <b>${config.coinglass.cumulativeZThreshold}</b> (${config.coinglass.cumulativeZWindow} candles)`,
+                    `🔥 Sustained Build: CUSUM > <b>${config.coinglass.cusumThreshold}</b>`,
+                    `⏱ Cooldown: <b>${config.coinglass.cooldownSeconds / 3600}h</b>`,
+                    `🕐 Scan interval: <b>${config.coinglass.intervalMs / 60000}m</b>`
+                ].join('\n')
             }
         ];
 
-        for (const { chatId, message } of channelMessages) {
+        const enabledMessages = channelMessages.filter(({ tracker }) =>
+            trackerNames
+                .filter((t) => config.trackers.includes(t.name))
+                .map((t) => t.fullName)
+                .includes(tracker)
+        );
+        logger.info(`Sending startup messages to ${enabledMessages.length} channels`);
+        for (const { chatId, message } of enabledMessages) {
             const redisKey = `${STARTUP_MSG_PREFIX}${chatId}`;
             const oldMsgId = await redis.get(redisKey);
             if (oldMsgId) {
