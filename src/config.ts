@@ -136,21 +136,23 @@ export const config = {
         blacklist: process.env['COINGLASS_BLACKLIST']
             ? process.env['COINGLASS_BLACKLIST'].split(',').map((t) => t.trim().toUpperCase())
             : [],
-        warmupConcurrency: parseInt(optionalEnv('COINGLASS_WARMUP_CONCURRENCY', '5'), 10),
+        warmupConcurrency: parseInt(optionalEnv('COINGLASS_WARMUP_CONCURRENCY', '4'), 10),
         cooldownSeconds: 21600, // 6 hours
         ewmaLookback: 96, // 48 hours of 30m candles
         ewmaAlpha: 2 / (96 + 1), // ~0.02062
         zScoreThreshold: 4, // fast spike → HIGH
-        cumulativeZThreshold: 6, // slow accumulation over 4 candles → HIGH
+        cumulativeZThreshold: 8, // slow accumulation over 4 candles → HIGH
         cumulativeZWindow: 4, // candles for cumulative z
         cusumThreshold: 12, // sustained build → CRITICAL
-        minOIThreshold: 300_000, // minimum OI in USD to consider for detection
+        minOIThreshold: 1_000_000, // minimum OI in USD to consider for detection
+        minDeltaOIUsd: 100_000, // minimum OI delta (USD) required for any trigger
+        minDeltaOIPercent: 1.5, // minimum OI delta (%) required for any trigger
         cusumDrift: 1, // CUSUM drift parameter k
         stealthPriceThreshold: 2, // <=2% price move = stealth positioning
         warmupCandles: 96, // minimum candles before alerting
         refreshIntervalMs: parseInt(optionalEnv('COINGLASS_REFRESH_INTERVAL_MS', '3600000'), 10),
         intervalMs: 30 * 60 * 1000, // 30 minutes
-        noDataTimeoutMs: 90 * 60 * 1000, // 1 hour
-        scanStallTimeoutMs: 90 * 60 * 1000 // 1 hour
+        noDataTimeoutMs: 120 * 60 * 1000, // 2 hour
+        scanStallTimeoutMs: 120 * 60 * 1000 // 2 hour
     }
 } as const;

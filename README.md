@@ -95,7 +95,7 @@ Create a `.env` file in the project root.
 | `COINGLASS_EXCHANGES` | `Binance,OKX,Bybit` | Comma-separated exchanges to monitor |
 | `COINGLASS_REFRESH_INTERVAL_MS` | `3600000` | Token universe refresh interval (1h) |
 | `COINGLASS_BLACKLIST` | `` | Comma-separated tokens to exclude from OI detection |
-| `COINGLASS_WARMUP_CONCURRENCY` | `5` | Parallel warmup batch size |
+| `COINGLASS_WARMUP_CONCURRENCY` | `4` | Parallel warmup batch size |
 
 ## Run locally
 

@@ -96,7 +96,7 @@ CoinGlass OI Anomaly Tracker:
 - `COINGLASS_EXCHANGES` (default: `Binance,OKX,Bybit`)
 - `COINGLASS_REFRESH_INTERVAL_MS` (default: `3600000` / 1h)
 - `COINGLASS_BLACKLIST` (default: empty — comma-separated tokens to exclude from detection)
-- `COINGLASS_WARMUP_CONCURRENCY` (default: `5` — parallel warmup batch size)
+- `COINGLASS_WARMUP_CONCURRENCY` (default: `4` — parallel warmup batch size)
 
 ### CoinGlass Detection Parameters (hardcoded in config.ts)
 
@@ -106,9 +106,12 @@ CoinGlass OI Anomaly Tracker:
 | EWMA lookback | 96 intervals (48h) | Window for mean/variance |
 | EWMA α | ~0.02062 | Decay factor |
 | Fast spike (z) | > 4 | Single-interval robust z-score → HIGH |
-| Slow accumulation (Σz) | > 6 | Cumulative z over 4 candles → HIGH |
-| CUSUM threshold | > 8 | Sustained build → CRITICAL |
+| Slow accumulation (Σz) | > 8 | Cumulative z over 4 candles → HIGH |
+| CUSUM threshold | > 12 | Sustained build → CRITICAL |
 | CUSUM drift k | 1 | Sensitivity parameter |
+| Min OI | >= $1.0M | Ignore low-OI markets |
+| Min delta OI (USD) | >= $100K | Global gate for all triggers |
+| Min delta OI (%) | >= 1.5% | Global gate for all triggers |
 | Stealth price | ≤ 2% | Price move to flag stealth positioning |
 | Warmup | 96 candles | Before pair can alert |
 | Cooldown | 6 hours | Per-pair suppression |

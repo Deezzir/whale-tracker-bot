@@ -24,11 +24,16 @@ CoinglassService (tracker)
 1. **ΔOI computation**: interval-over-interval OI change
 2. **EWMA normalization**: exponentially weighted mean & variance (α ≈ 0.02062, 48h effective window at 30m intervals)
 3. **MAD-based robust z-score**: resistant to fat-tailed outliers
-4. **Three trigger channels**:
+4. **Global quality gates** (apply before trigger checks):
+   - current OI must be >= $1.0M
+   - current candle must have positive ΔOI
+   - current candle must have ΔOI >= $100K
+   - current candle must have ΔOI >= 1.5%
+5. **Three trigger channels**:
    - Fast Spike: single-interval z > 4 → HIGH
-   - Slow Accumulation: cumulative z over 4 candles > 6 → HIGH
-   - Sustained Build: CUSUM > 8 (drift k=1) → CRITICAL
-5. **Price context**: annotates alerts with stealth positioning flag when |price change| ≤ 2%
+   - Slow Accumulation: cumulative z over 4 candles > 8 → HIGH
+   - Sustained Build: CUSUM > 12 (drift k=1) → CRITICAL
+6. **Price context**: annotates alerts with stealth positioning flag when |price change| ≤ 2%
 
 ## Alert Format
 
