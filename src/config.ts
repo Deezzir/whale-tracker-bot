@@ -143,13 +143,14 @@ export const config = {
         zScoreThreshold: 4, // fast spike → HIGH
         cumulativeZThreshold: 6, // slow accumulation over 4 candles → HIGH
         cumulativeZWindow: 4, // candles for cumulative z
-        cusumThreshold: 8, // sustained build → CRITICAL
+        cusumThreshold: 12, // sustained build → CRITICAL
+        minOIThreshold: 300_000, // minimum OI in USD to consider for detection
         cusumDrift: 1, // CUSUM drift parameter k
         stealthPriceThreshold: 2, // <=2% price move = stealth positioning
         warmupCandles: 96, // minimum candles before alerting
         refreshIntervalMs: parseInt(optionalEnv('COINGLASS_REFRESH_INTERVAL_MS', '3600000'), 10),
         intervalMs: 30 * 60 * 1000, // 30 minutes
-        noDataTimeoutMs: 60 * 60 * 1000, // 1 hour
-        scanStallTimeoutMs: 60 * 60 * 1000 // 1 hour
+        noDataTimeoutMs: 90 * 60 * 1000, // 1 hour
+        scanStallTimeoutMs: 90 * 60 * 1000 // 1 hour
     }
 } as const;

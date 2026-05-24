@@ -104,6 +104,7 @@ export function updatePairState(state: PairStatisticalState, newOIClose: number)
 export function detectAnomaly(state: PairStatisticalState): Omit<OIAnomalyEvent, 'priceContext' | 'detectedAt'> | null {
     if (state.status !== 'READY') return null;
     if (state.recentZScores.length === 0) return null;
+    if ((state.lastOI || 0) < config.coinglass.minOIThreshold) return null;
 
     const latestZ = state.recentZScores[state.recentZScores.length - 1];
     const previousOI =
@@ -149,8 +150,8 @@ export function detectAnomaly(state: PairStatisticalState): Omit<OIAnomalyEvent,
         }
     }
 
-    // Check single-interval robust z-score
-    if (Math.abs(latestZ) > config.coinglass.zScoreThreshold) {
+    // Check single-interval robust z-score (positive only — OI increases)
+    if (latestZ > config.coinglass.zScoreThreshold) {
         return {
             exchange: state.exchange,
             instrumentId: state.instrumentId,
