@@ -1,8 +1,8 @@
 import { InlineKeyboardMarkup } from 'telegraf/types';
 import { Tracker } from '../../common/tracker';
 import { config } from '../../config';
-import PolymarketAPIService, { Trade } from '../api/polymarket';
-import PolymarketDBService, { PolyAggregationRecord, PolyTradeInput, PositionKey } from '../db/polymarket';
+import APIService, { Trade } from '../api/polymarket';
+import DBService, { PolyAggregationRecord, PolyTradeInput, PositionKey } from '../db/polymarket';
 import { escapeHtml, formatCurrency, formatDate, sleep, withTimeout } from '../../common/utils';
 
 type MarketCategory = 'sport' | 'esports' | 'regular';
@@ -81,7 +81,7 @@ function isEsportsMarket(title: string): boolean {
 }
 
 export default class PolymarketService extends Tracker {
-    private api = new PolymarketAPIService();
+    private api = new APIService();
     private static readonly CONNECT_TIMEOUT_MS = 15_000;
     private tradeBatch: PolyTradeInput[] = [];
     private batchInterval: NodeJS.Timeout | null = null;
@@ -164,8 +164,8 @@ export default class PolymarketService extends Tracker {
         const cleanupLoop = async () => {
             while (this.running) {
                 try {
-                    await PolymarketDBService.cleanTrades(config.polymarket.cleanupTTLms);
-                    await PolymarketDBService.cleanAlerts(config.polymarket.cleanupTTLms);
+                    await DBService.cleanTrades(config.polymarket.cleanupTTLms);
+                    await DBService.cleanAlerts(config.polymarket.cleanupTTLms);
                 } catch (error) {
                     this.logger.error(`Failed to cleanup: ${error}`);
                 }
@@ -205,7 +205,7 @@ export default class PolymarketService extends Tracker {
         const keysToScan = Array.from(this.affectedKeys.values());
         this.affectedKeys.clear();
 
-        const candidates = await PolymarketDBService.getTradesToAlert(
+        const candidates = await DBService.getTradesToAlert(
             keysToScan,
             config.polymarket.alertThresholdUsd,
             config.polymarket.sportAlertThresholdUsd,
@@ -264,7 +264,7 @@ export default class PolymarketService extends Tracker {
         const tradeTag = classifyTradeTag(candidate.netUsd, walletStats.buyTradeAmounts);
         const tradeMedianUSD = getMedianAmount(walletStats.buyTradeAmounts);
 
-        const lastAlerts = await PolymarketDBService.getLastAlerts(
+        const lastAlerts = await DBService.getLastAlerts(
             candidate.wallet,
             candidate.conditionId,
             candidate.outcomeIndex,
@@ -303,7 +303,7 @@ export default class PolymarketService extends Tracker {
                         message_thread_id: channel.topicId
                     });
                 }
-                await PolymarketDBService.insertAlert({
+                await DBService.insertAlert({
                     proxyWallet: candidate.wallet,
                     conditionId: candidate.conditionId,
                     outcomeIndex: candidate.outcomeIndex,
@@ -432,7 +432,7 @@ export default class PolymarketService extends Tracker {
 
             try {
                 this.logger.info(`Flushing trade batch of size ${batchToFlush.length}`);
-                await PolymarketDBService.addTradesBulk(batchToFlush, config.polymarket.aggregationWindowMs);
+                await DBService.addTradesBulk(batchToFlush, config.polymarket.aggregationWindowMs);
                 for (const trade of batchToFlush) {
                     const keyStr = `${trade.proxyWallet}:${trade.conditionId}:${trade.outcomeIndex}`;
                     if (!this.affectedKeys.has(keyStr)) {
@@ -562,7 +562,7 @@ export default class PolymarketService extends Tracker {
                         message_thread_id: channel.topicId
                     });
                 }
-                await PolymarketDBService.insertAlert({
+                await DBService.insertAlert({
                     proxyWallet: candidate.wallet,
                     conditionId: candidate.conditionId,
                     outcomeIndex: candidate.outcomeIndex,

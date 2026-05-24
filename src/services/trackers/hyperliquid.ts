@@ -4,14 +4,14 @@ import { InlineKeyboardMarkup } from 'telegraf/types';
 import { ChatChannel, Tracker } from '../../common/tracker';
 import { escapeHtml, formatCurrency, formatTimeAgo, sleep, withTimeout } from '../../common/utils';
 import Tg from '../telegram';
-import HyperliquidDBService, {
+import DBService, {
     HyperAggregationRecord,
     HyperTrackedRecord,
     HyperTradeDirection,
     HyperTradeRecord,
     PositionKey
 } from '../db/hyperliquid';
-import HyperliquidAPI, { AssetPosition, PortfolioResponse as TraderPortfolio, TraderState } from '../api/hyperliquid';
+import APIService, { AssetPosition, PortfolioResponse as TraderPortfolio, TraderState } from '../api/hyperliquid';
 
 type AccountTag = {
     tag: 'FRESH' | 'DORMANT' | 'SMALL' | 'MEDIUM' | 'LARGE';
@@ -123,7 +123,7 @@ interface AlertContext {
 }
 
 export default class HyperliquidService extends Tracker {
-    private api = new HyperliquidAPI();
+    private api = new APIService();
     private hypurrscanExplorer = config.hyperliquid.hypurrscanExplorer;
     private hyperdashExplorer = config.hyperliquid.hyperdashExplorer;
     private freshWalletChannels: ChatChannel[];
@@ -230,7 +230,7 @@ export default class HyperliquidService extends Tracker {
 
     async track(wallet: string, coin: string, direction: HyperTradeDirection): Promise<string> {
         try {
-            const found = await HyperliquidDBService.isWalletTracked(wallet, coin, direction);
+            const found = await DBService.isWalletTracked(wallet, coin, direction);
             if (found)
                 return `Wallet <code>${escapeHtml(wallet)}</code> is already being tracked for ${coin.toUpperCase()} ${direction.toUpperCase()}.`;
 
@@ -253,7 +253,7 @@ export default class HyperliquidService extends Tracker {
                 );
             const currentNotional = Math.abs(currentSzi) * parseFloat(currentPosition.position.entryPx || '0');
 
-            await HyperliquidDBService.addUpdateTrackedWallet(wallet, coin, direction, currentNotional);
+            await DBService.addUpdateTrackedWallet(wallet, coin, direction, currentNotional);
             return `Added wallet <code>${escapeHtml(wallet)}</code> for tracking (${coin.toUpperCase()} ${direction.toUpperCase()}).`;
         } catch (error) {
             this.logger.error(`Failed to track the wallet: ${error}`);
@@ -263,7 +263,7 @@ export default class HyperliquidService extends Tracker {
 
     async trackById(id: string): Promise<{ msg: string; buttons: InlineKeyboardMarkup | null }> {
         try {
-            const trade = await HyperliquidDBService.getTradeById(id);
+            const trade = await DBService.getTradeById(id);
             if (!trade) return { msg: 'Trade not found.', buttons: null };
             const updated_buttons: InlineKeyboardMarkup = {
                 inline_keyboard: [
@@ -276,18 +276,13 @@ export default class HyperliquidService extends Tracker {
                 ]
             };
 
-            const found = await HyperliquidDBService.isWalletTracked(trade.wallet, trade.coin, trade.direction);
+            const found = await DBService.isWalletTracked(trade.wallet, trade.coin, trade.direction);
             if (found)
                 return {
                     msg: `Wallet <code>${escapeHtml(trade.wallet)}</code> is already being tracked for ${trade.coin.toUpperCase()} ${trade.direction.toUpperCase()}.`,
                     buttons: updated_buttons
                 };
-            await HyperliquidDBService.addUpdateTrackedWallet(
-                trade.wallet,
-                trade.coin,
-                trade.direction,
-                trade.totalNotional
-            );
+            await DBService.addUpdateTrackedWallet(trade.wallet, trade.coin, trade.direction, trade.totalNotional);
             return {
                 msg: `Added wallet <code>${escapeHtml(trade.wallet)}</code> for tracking (${trade.coin.toUpperCase()} ${trade.direction.toUpperCase()}).`,
                 buttons: updated_buttons
@@ -300,7 +295,7 @@ export default class HyperliquidService extends Tracker {
 
     async untrack(wallet: string, coin: string, direction: HyperTradeDirection): Promise<string> {
         try {
-            const deleted = await HyperliquidDBService.removeTrackedWallet(wallet, coin, direction);
+            const deleted = await DBService.removeTrackedWallet(wallet, coin, direction);
             if (deleted) return `Removed wallet <code>${escapeHtml(deleted.wallet)}</code> from tracking.`;
             else return `Wallet <code>${escapeHtml(wallet)}</code> with such order was not found in tracked list.`;
         } catch (error) {
@@ -311,7 +306,7 @@ export default class HyperliquidService extends Tracker {
 
     async untrackById(id: string): Promise<{ msg: string; buttons: InlineKeyboardMarkup | null }> {
         try {
-            const deleted = await HyperliquidDBService.removeTrackedWalletById(id);
+            const deleted = await DBService.removeTrackedWalletById(id);
             if (deleted) {
                 const updated_buttons: InlineKeyboardMarkup = {
                     inline_keyboard: [
@@ -340,7 +335,7 @@ export default class HyperliquidService extends Tracker {
 
     async listTracked(): Promise<string> {
         try {
-            const trackedWallets = await HyperliquidDBService.getTrackedWallets();
+            const trackedWallets = await DBService.getTrackedWallets();
             if (trackedWallets.length === 0) {
                 return 'No wallets are currently being tracked.';
             }
@@ -377,8 +372,8 @@ export default class HyperliquidService extends Tracker {
         const cleanupLoop = async () => {
             while (this.running) {
                 try {
-                    await HyperliquidDBService.cleanTrades(config.hyperliquid.cleanupTTLms);
-                    await HyperliquidDBService.cleanAlerts(config.hyperliquid.cleanupTTLms);
+                    await DBService.cleanTrades(config.hyperliquid.cleanupTTLms);
+                    await DBService.cleanAlerts(config.hyperliquid.cleanupTTLms);
                 } catch (error) {
                     this.logger.error(`Failed to cleanup: ${error}`);
                 }
@@ -426,7 +421,7 @@ export default class HyperliquidService extends Tracker {
 
         const perpCandidates =
             perpKeys.length > 0
-                ? await HyperliquidDBService.getTradesToAlert(
+                ? await DBService.getTradesToAlert(
                       perpKeys,
                       config.hyperliquid.minNotionalUSD,
                       config.hyperliquid.aggregationWindowMs
@@ -435,7 +430,7 @@ export default class HyperliquidService extends Tracker {
 
         const spotCandidates =
             spotKeys.length > 0
-                ? await HyperliquidDBService.getTradesToAlert(
+                ? await DBService.getTradesToAlert(
                       spotKeys,
                       config.hyperliquid.minSpotNotionalUSD,
                       config.hyperliquid.aggregationWindowMs
@@ -483,7 +478,7 @@ export default class HyperliquidService extends Tracker {
     }
 
     private async trackAndAlert(): Promise<void> {
-        const trackedWallets = await HyperliquidDBService.getExpiredTrackedWallets();
+        const trackedWallets = await DBService.getExpiredTrackedWallets();
         this.logger.info(`Found ${trackedWallets.length} tracked wallets to check`);
 
         for (const tracked of trackedWallets) {
@@ -514,7 +509,7 @@ export default class HyperliquidService extends Tracker {
                 tracked.direction,
                 'closed'
             );
-            await HyperliquidDBService.removeTrackedWalletById(tracked.id);
+            await DBService.removeTrackedWalletById(tracked.id);
             return;
         }
 
@@ -529,7 +524,7 @@ export default class HyperliquidService extends Tracker {
                 tracked.direction,
                 'direction'
             );
-            await HyperliquidDBService.removeTrackedWalletById(tracked.id);
+            await DBService.removeTrackedWalletById(tracked.id);
             return;
         }
 
@@ -542,7 +537,7 @@ export default class HyperliquidService extends Tracker {
                 currentNotional,
                 currentPosition
             });
-            await HyperliquidDBService.addUpdateTrackedWallet(
+            await DBService.addUpdateTrackedWallet(
                 tracked.wallet,
                 tracked.coin,
                 tracked.direction,
@@ -550,7 +545,7 @@ export default class HyperliquidService extends Tracker {
                 config.hyperliquid.trackedCheckIntervalMs
             );
         } else {
-            await HyperliquidDBService.addUpdateTrackedWallet(
+            await DBService.addUpdateTrackedWallet(
                 tracked.wallet,
                 tracked.coin,
                 tracked.direction,
@@ -755,7 +750,7 @@ export default class HyperliquidService extends Tracker {
 
             try {
                 this.logger.info(`Flushing trade batch of size ${batchToFlush.length}`);
-                await HyperliquidDBService.addTradesBulk(batchToFlush, config.hyperliquid.aggregationWindowMs);
+                await DBService.addTradesBulk(batchToFlush, config.hyperliquid.aggregationWindowMs);
                 for (const trade of batchToFlush) {
                     const keyStr = `${trade.wallet}:${trade.coin}:${trade.direction}`;
                     if (!this.affectedKeys.has(keyStr)) {
@@ -1023,7 +1018,7 @@ export default class HyperliquidService extends Tracker {
             this.logger.debug(
                 `Skipping alert for high-value perps trade (no position found): ${candidate.wallet} ${candidate.coin} ${formatCurrency(candidate.totalNotional)} (${candidate.direction})`
             );
-            await HyperliquidDBService.deleteTrade(candidate.id);
+            await DBService.deleteTrade(candidate.id);
             return;
         }
         const direction: HyperTradeDirection = parseFloat(positionState.position.szi) > 0 ? 'long' : 'short';
@@ -1031,7 +1026,7 @@ export default class HyperliquidService extends Tracker {
             this.logger.debug(
                 `Skipping alert for high-value perps trade (direction mismatch): ${candidate.wallet} ${candidate.coin} ${formatCurrency(candidate.totalNotional)} (${candidate.direction})`
             );
-            await HyperliquidDBService.deleteTrade(candidate.id);
+            await DBService.deleteTrade(candidate.id);
             return;
         }
         const upstreamTotalNotional = Math.abs(
@@ -1044,7 +1039,7 @@ export default class HyperliquidService extends Tracker {
             return;
         }
         candidate.totalNotional = upstreamTotalNotional;
-        await HyperliquidDBService.updateTradeNotional(candidate.id, candidate.totalNotional);
+        await DBService.updateTradeNotional(candidate.id, candidate.totalNotional);
 
         const accountTag = classifyAccountTag(state, portfolio);
         const branches = classifyBranches(candidate.coin, candidate.totalNotional, accountTag);
@@ -1060,7 +1055,7 @@ export default class HyperliquidService extends Tracker {
         const branch = branches[0];
         const alertChannels = this.getChannelsForBranch(branch);
 
-        const lastAlerts = await HyperliquidDBService.getLastAlerts(
+        const lastAlerts = await DBService.getLastAlerts(
             candidate.wallet,
             candidate.coin,
             candidate.direction,
@@ -1101,7 +1096,7 @@ export default class HyperliquidService extends Tracker {
                         message_thread_id: channel.topicId
                     });
                 }
-                await HyperliquidDBService.insertAlert({
+                await DBService.insertAlert({
                     wallet: candidate.wallet,
                     coin: candidate.coin,
                     direction: candidate.direction,
@@ -1158,7 +1153,7 @@ export default class HyperliquidService extends Tracker {
                     reply_markup: buttons
                 });
             }
-            await HyperliquidDBService.insertAlert({
+            await DBService.insertAlert({
                 wallet: candidate.wallet,
                 coin: candidate.coin,
                 direction: candidate.direction,
@@ -1196,7 +1191,7 @@ export default class HyperliquidService extends Tracker {
         }
 
         candidate.totalNotional = upstreamTotalNotional;
-        await HyperliquidDBService.updateTradeNotional(candidate.id, candidate.totalNotional);
+        await DBService.updateTradeNotional(candidate.id, candidate.totalNotional);
 
         const isTwap = this.detectTwap(candidate);
         const branch: AlertBranch | null = isTwap ? 'BIG_TWAP' : null;
@@ -1209,7 +1204,7 @@ export default class HyperliquidService extends Tracker {
             return;
         }
 
-        const lastAlerts = await HyperliquidDBService.getLastAlerts(
+        const lastAlerts = await DBService.getLastAlerts(
             candidate.wallet,
             candidate.coin,
             candidate.direction,
@@ -1247,7 +1242,7 @@ export default class HyperliquidService extends Tracker {
                         message_thread_id: channel.topicId
                     });
                 }
-                await HyperliquidDBService.insertAlert({
+                await DBService.insertAlert({
                     wallet: candidate.wallet,
                     coin: candidate.coin,
                     direction: candidate.direction,
@@ -1305,7 +1300,7 @@ export default class HyperliquidService extends Tracker {
                     reply_markup: buttons
                 });
             }
-            await HyperliquidDBService.insertAlert({
+            await DBService.insertAlert({
                 wallet: candidate.wallet,
                 coin: candidate.coin,
                 direction: candidate.direction,

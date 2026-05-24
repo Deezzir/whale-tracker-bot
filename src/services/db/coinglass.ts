@@ -110,7 +110,7 @@ export default class CoinglassDBService {
         return ExchangeInstrumentModel.find(filter).lean();
     }
 
-    static async persistAlertRecord(record: Omit<IOIAlertRecord, keyof Document>): Promise<void> {
+    static async insertAlert(record: Omit<IOIAlertRecord, keyof Document>): Promise<void> {
         await OIAlertRecordModel.create(record);
     }
 }

@@ -368,7 +368,7 @@ export default class StakeService extends Tracker {
                 });
             }
         }
-        await DBService.markStakeBetAlerted(candidate.id);
+        await DBService.markAlerted(candidate.id);
     }
 
     private getEventDetails(type: BetType, outcomes: BetOutcome[]): string[] {

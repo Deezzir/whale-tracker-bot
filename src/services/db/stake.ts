@@ -122,7 +122,7 @@ export default class StakeDBService {
         }
     }
 
-    static async markStakeBetAlerted(id: string): Promise<void> {
+    static async markAlerted(id: string): Promise<void> {
         try {
             await StakeBetModel.updateOne(
                 { _id: new mongoose.Types.ObjectId(id) },
