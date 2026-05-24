@@ -495,6 +495,24 @@ export default class CoinglassService extends Tracker {
                         if (items.length < 2) throw new Error('Less than 2 search results found');
                         await items[1].click();
                         await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 10000 });
+
+                        const frame = page.frames().find((f) => {
+                            return f.url().includes('blob:');
+                        });
+                        if (!frame) return;
+                        await sleep(1000);
+                        await frame.click('[data-name="open-indicators-dialog"]');
+                        console.log('Clicked indicators dialog');
+                        await sleep(1000);
+                        await frame.type('input[data-role="search"]', 'Funding Rate');
+                        await frame.click('div[data-id="FundingRateSingleValue@tv-basicstudies"]');
+
+                        await page.keyboard.press('Escape');
+                        try {
+                            await frame.waitForSelector('input[data-role="search"]', { hidden: true, timeout: 2000 });
+                        } catch {
+                            await page.keyboard.press('Escape');
+                        }
                     }
                 );
             } catch (error) {

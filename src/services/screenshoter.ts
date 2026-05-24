@@ -154,7 +154,7 @@ export default class ScreenshotService {
             logger.error(`Screenshot failed for ${url}: ${err}`);
             throw err;
         } finally {
-            if (page) await page.close().catch(() => { });
+            if (page) await page.close().catch(() => {});
             this.activeCaptures = Math.max(0, this.activeCaptures - 1);
             this.scheduleIdleClose();
         }
