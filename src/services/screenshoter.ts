@@ -77,12 +77,28 @@ export default class ScreenshotService {
         logger.info('Puppeteer stopped');
     }
 
-    async capture(url: string, selector?: string, waitFn?: () => boolean): Promise<Buffer | null> {
+    async capture(
+        url: string,
+        selector?: string,
+        waitFn?: () => boolean,
+        prehook?: (page: Page) => Promise<void>,
+        viewport = { width: 1280, height: 1400 }
+    ): Promise<Buffer | null> {
         const MAX_RETRIES = 3;
-        return retry(() => this.captureInternal(url, selector, waitFn), { attempts: MAX_RETRIES }, logger);
+        return retry(
+            () => this.captureInternal(url, selector, waitFn, prehook, viewport),
+            { attempts: MAX_RETRIES },
+            logger
+        );
     }
 
-    private async captureInternal(url: string, selector?: string, waitFn?: () => boolean): Promise<Buffer | null> {
+    private async captureInternal(
+        url: string,
+        selector?: string,
+        waitFn?: () => boolean,
+        prehook?: (page: Page) => Promise<void>,
+        viewport?: { width: number; height: number }
+    ): Promise<Buffer | null> {
         let page: Page | null = null;
         this.activeCaptures++;
         this.clearIdleCloseTimer();
@@ -107,7 +123,7 @@ export default class ScreenshotService {
                 }
             });
 
-            await page.setViewport({ width: 1280, height: 1400 });
+            await page.setViewport(viewport!);
             await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: 'dark' }]);
             await page.evaluateOnNewDocument(() => {
                 Object.defineProperty(navigator, 'webdriver', { get: () => false });
@@ -116,6 +132,8 @@ export default class ScreenshotService {
             await page.goto(url, { waitUntil: 'networkidle2' });
             await page.waitForSelector('body', { timeout: 10_000 });
             await sleep(3000);
+
+            if (prehook) await prehook(page);
 
             if (waitFn) {
                 await page.waitForFunction(waitFn, { timeout: 15_000, polling: 1000 });
@@ -136,7 +154,7 @@ export default class ScreenshotService {
             logger.error(`Screenshot failed for ${url}: ${err}`);
             throw err;
         } finally {
-            if (page) await page.close().catch(() => {});
+            if (page) await page.close().catch(() => { });
             this.activeCaptures = Math.max(0, this.activeCaptures - 1);
             this.scheduleIdleClose();
         }

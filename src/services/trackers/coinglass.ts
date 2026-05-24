@@ -1,7 +1,7 @@
 import { Tracker } from '../../common/tracker';
 import { config } from '../../config';
-import CoinglassAPI, { Interval, OICandle, PriceCandle } from '../api/coinglass';
-import CoinglassDBService, { TriggerType, Severity } from '../db/coinglass';
+import APIService, { Interval, OICandle, PriceCandle } from '../api/coinglass';
+import DBService, { TriggerType, Severity } from '../db/coinglass';
 import { getRedisClient } from '../redis';
 import Tg from '../telegram';
 import { sleep } from '../../common/utils';
@@ -115,6 +115,11 @@ export function detectAnomaly(state: PairStatisticalState): Omit<OIAnomalyEvent,
     const deltaOI = state.recentDeltaOI.length > 0 ? state.recentDeltaOI[state.recentDeltaOI.length - 1] : 0;
     const deltaOIPercent = previousOI > 0 ? (deltaOI / previousOI) * 100 : 0;
 
+    // Global quality gates to reduce low-signal noise
+    if (deltaOI <= 0) return null;
+    if (deltaOI < config.coinglass.minDeltaOIUsd) return null;
+    if (deltaOIPercent < config.coinglass.minDeltaOIPercent) return null;
+
     // Check CUSUM first (CRITICAL severity)
     if (state.cusumScore > config.coinglass.cusumThreshold) {
         return {
@@ -150,7 +155,7 @@ export function detectAnomaly(state: PairStatisticalState): Omit<OIAnomalyEvent,
         }
     }
 
-    // Check single-interval robust z-score (positive only — OI increases)
+    // Check single-interval robust z-score (positive only - OI increases)
     if (latestZ > config.coinglass.zScoreThreshold) {
         return {
             exchange: state.exchange,
@@ -184,7 +189,7 @@ export function computePriceContext(priceCandles: PriceCandle[]): {
 }
 
 export default class CoinglassService extends Tracker {
-    private api = new CoinglassAPI();
+    private api = new APIService();
     private pairStates = new Map<string, PairStatisticalState>();
     private warmupDone = false;
     private defaultInterval: Interval = '30m';
@@ -260,7 +265,7 @@ export default class CoinglassService extends Tracker {
         for (const exchange of config.coinglass.exchanges) {
             try {
                 let pairs = await this.api.fetchExchangePairs(exchange);
-                await CoinglassDBService.upsertInstrumentUniverse(exchange, pairs);
+                await DBService.upsertInstrumentUniverse(exchange, pairs);
 
                 const allPairsCount = pairs.length;
                 if (blacklist.length > 0) {
@@ -467,47 +472,70 @@ export default class CoinglassService extends Tracker {
             return;
         }
 
-        const message = this.formatOIAlert(event);
-        const buttons: InlineKeyboardMarkup = {
-            inline_keyboard: [[{ text: '📊 View OI on Coinalyze', url: 'https://coinalyze.net/' }]]
-        };
+        const result = this.formatAlertMessage(event);
+        if (!result) return;
+        const { msg, buttons } = result;
+
+        let screenshot: Buffer | null = null;
+        if (config.puppeteer.screenshotEnabled) {
+            const query = `${event.baseAsset} ${event.exchange} open interest`;
+            try {
+                screenshot = await this.screenshoter.capture(
+                    `https://coinalyze.net/`,
+                    'div[id="chart-elm"]',
+                    undefined,
+                    async (page) => {
+                        await page.click('input[placeholder="Search"]');
+                        await page.type('input[placeholder="Search"]', query, { delay: 100 });
+                        await page.waitForSelector('ul.symbol-search li:nth-child(2)', {
+                            visible: true,
+                            timeout: 10000
+                        });
+                        const items = await page.$$('ul.symbol-search li');
+                        if (items.length < 2) throw new Error('Less than 2 search results found');
+                        await items[1].click();
+                        await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 10000 });
+                    }
+                );
+            } catch (error) {
+                this.logger.warn(
+                    `Failed to capture Coinalyze screenshot for ${event.exchange}:${event.instrumentId}, sending text alert only: ${error}`
+                );
+                screenshot = null;
+            }
+        }
 
         for (let i = 0; i < this.channels.length; i++) {
             if (i > 0) await sleep(1000);
             const channel = this.channels[i];
             try {
-                const chatId = config.telegram.coinglassChatId;
-                const messageId = await this.tg.sendMessage(channel.chatId, message, { reply_markup: buttons });
+                let messageId: number | undefined;
+                if (screenshot) {
+                    messageId = await this.tg.sendPhoto(channel.chatId, screenshot, msg, {
+                        reply_markup: buttons,
+                        message_thread_id: channel.topicId
+                    });
+                } else {
+                    messageId = await this.tg.sendMessage(channel.chatId, msg, {
+                        reply_markup: buttons,
+                        message_thread_id: channel.topicId
+                    });
+                }
                 await redis.set(cooldownKey, event.severity, { EX: config.coinglass.cooldownSeconds });
-                await CoinglassDBService.persistAlertRecord({
-                    exchange: event.exchange,
-                    instrumentId: event.instrumentId,
-                    baseAsset: event.baseAsset,
-                    triggerType: event.triggerType,
-                    triggerValue: event.triggerValue,
-                    previousOI: event.previousOI,
-                    currentOI: event.currentOI,
-                    deltaOIPercent: event.deltaOIPercent,
-                    severity: event.severity,
-                    priceChangePercent: event.priceContext.priceChangePercent,
-                    isStealthPositioning: event.priceContext.isStealthPositioning,
-                    detectedAt: event.detectedAt,
+                await DBService.insertAlert({
+                    ...event,
                     sentAt: new Date(),
-                    chatId,
+                    chatId: channel.chatId,
                     messageId,
                     cooldownUntil: new Date(Date.now() + config.coinglass.cooldownSeconds * 1000)
                 } as any);
-
-                this.logger.info(
-                    `Alert sent: ${event.severity} ${event.triggerType} on ${event.exchange}:${event.baseAsset} (z=${event.triggerValue.toFixed(2)})`
-                );
             } catch (error) {
                 this.logger.error(`Failed to send alert for ${event.exchange}:${event.instrumentId}: ${error}`);
             }
         }
     }
 
-    private formatOIAlert(event: OIAnomalyEvent): string {
+    private formatAlertMessage(event: OIAnomalyEvent): { msg: string; buttons: InlineKeyboardMarkup } | null {
         const severityEmoji = event.severity === 'CRITICAL' ? '🚨' : '⚠️';
         const triggerLabel = {
             FAST_SPIKE: '⚡ Fast Spike',
@@ -541,7 +569,12 @@ export default class CoinglassService extends Tracker {
 
         lines.push(``, `🕐 ${event.detectedAt.toISOString().replace('T', ' ').slice(0, 19)} UTC`);
 
-        return lines.join('\n');
+        return {
+            msg: lines.join('\n'),
+            buttons: {
+                inline_keyboard: [[{ text: '📊 View OI on Coinalyze', url: 'https://coinalyze.net/' }]]
+            }
+        };
     }
 
     private getThresholdForType(triggerType: TriggerType): string {
