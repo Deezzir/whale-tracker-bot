@@ -1,3 +1,5 @@
+import Logger from './logger';
+
 export function sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -15,18 +17,6 @@ export function withTimeout<T>(promise: Promise<T>, ms: number, label = 'Operati
         timer = setTimeout(() => reject(new TimeoutError(label, ms)), ms);
     });
     return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
-}
-
-export async function retryWithBackoff<T>(operation: () => Promise<T>, retries = 3, delay_ms = 1000): Promise<T> {
-    try {
-        await sleep(delay_ms);
-        return await operation();
-    } catch (error: any) {
-        if (retries === 0 || !error.toString().includes('429')) {
-            throw error;
-        }
-        return retryWithBackoff(operation, retries - 1, delay_ms * 3);
-    }
 }
 
 export function isValidCoinSymbol(coin: string): boolean {
@@ -89,4 +79,36 @@ export function formatTimeAgo(timestampMs: number): string {
 export function formatDate(date: Date | null): string {
     if (!date) return 'Unknown';
     return date.toISOString().split('T')[0];
+}
+
+export interface RetryOptions {
+    attempts: number;
+    delayMs?: number;
+    backoffMultiplier?: number;
+}
+
+const defaultOptions: Required<Omit<RetryOptions, 'label'>> = {
+    attempts: 3,
+    delayMs: 1000,
+    backoffMultiplier: 2
+};
+
+export async function retry<T>(operation: () => Promise<T>, options: RetryOptions, logger: Logger): Promise<T> {
+    const { attempts, delayMs, backoffMultiplier } = { ...defaultOptions, ...options };
+    let lastError: any;
+
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+        try {
+            return await operation();
+        } catch (err: any) {
+            lastError = err;
+            if (attempt === attempts) break;
+            const delay = delayMs * Math.pow(backoffMultiplier, attempt - 1);
+            const errMsg = err?.message || String(err);
+            logger.warn(`Retry ${attempt}/${attempts} failed: ${errMsg}. Next attempt in ${delay}ms`);
+            await sleep(delay);
+        }
+    }
+
+    throw lastError;
 }

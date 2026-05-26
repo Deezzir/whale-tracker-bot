@@ -1,6 +1,5 @@
-import axios from 'axios';
 import { config } from '../../config';
-import { retryWithBackoff } from '../../common/utils';
+import { createApiClient, ApiClient } from '../../common/api-client';
 import Logger from '../../common/logger';
 import { getRedisClient } from '../redis';
 import { HyperTradeDirection } from '../db/hyperliquid';
@@ -130,16 +129,25 @@ export interface TokenDetails {
 
 const REQ_TIMEOUT = 10 * 1000; // 10 seconds
 
-const axiosConfig = { headers: { 'Content-Type': 'application/json' }, timeout: REQ_TIMEOUT };
-
 export default class HyperliquidAPI {
-    private api = config.hyperliquid.api;
+    private client: ApiClient;
     private redis = getRedisClient();
 
     private portfolioCacheKey = (user: string) => `hs:portfolio:${user}`;
     private clearinghouseCacheKey = (type: 'spot' | 'perp', user: string, dex?: string) =>
         `hs:clearinghouse:${type}:${dex ? dex : 'default'}:${user}`;
     private perpDexesCacheKey = (dex?: string) => `hs:perp-meta:${dex ? dex : 'default'}`;
+
+    constructor() {
+        this.client = createApiClient({
+            name: this.constructor.name,
+            baseURL: config.hyperliquid.api,
+            retry: config.hyperliquid.retry,
+            rateLimit: config.hyperliquid.rateLimit,
+            headers: { 'Content-Type': 'application/json' },
+            timeout: REQ_TIMEOUT
+        });
+    }
 
     public async fetchPerpDexes(): Promise<(PerpDex | null)[] | null> {
         const cacheKey = 'hs:perp-dexes';
@@ -148,9 +156,7 @@ export default class HyperliquidAPI {
         if (cachedDexes) return JSON.parse(cachedDexes);
 
         try {
-            const operation = () => axios.post(this.api, { type: 'perpDexs' }, axiosConfig);
-            const response = await retryWithBackoff(operation);
-
+            const response = await this.client.post<any>('', { type: 'perpDexs' });
             const data = response.data;
             await this.redis.setEx(cacheKey, config.monitor.cacheTTLMs / 1000, JSON.stringify(data));
             return data as PerpDex[];
@@ -165,8 +171,7 @@ export default class HyperliquidAPI {
         if (cachedPerps) return JSON.parse(cachedPerps);
 
         try {
-            const operation = () => axios.post(this.api, { type: 'metaAndAssetCtxs', dex }, axiosConfig);
-            const response = await retryWithBackoff(operation);
+            const response = await this.client.post<any>('', { type: 'metaAndAssetCtxs', dex });
             const data = response.data;
 
             const meta: PerpsMeta = {
@@ -188,8 +193,7 @@ export default class HyperliquidAPI {
         if (cachedSpot) return JSON.parse(cachedSpot);
 
         try {
-            const operation = () => axios.post(this.api, { type: 'spotMetaAndAssetCtxs' }, axiosConfig);
-            const response = await retryWithBackoff(operation);
+            const response = await this.client.post<any>('', { type: 'spotMetaAndAssetCtxs' });
             const data = response.data;
 
             const meta: SpotMeta = {
@@ -210,8 +214,7 @@ export default class HyperliquidAPI {
         if (cached) return JSON.parse(cached);
 
         try {
-            const operation = () => axios.post(this.api, { type: 'portfolio', user }, axiosConfig);
-            const response = await retryWithBackoff(operation);
+            const response = await this.client.post<any>('', { type: 'portfolio', user });
             const data = response.data as PortfolioResponse;
             await this.redis.setEx(
                 this.portfolioCacheKey(user),
@@ -230,8 +233,10 @@ export default class HyperliquidAPI {
         if (cached) return JSON.parse(cached);
 
         try {
-            const operation = () => axios.post(this.api, { type: 'spotClearinghouseState', user }, axiosConfig);
-            const response = await retryWithBackoff(operation);
+            const response = await this.client.post<any>('', {
+                type: 'spotClearinghouseState',
+                user
+            });
 
             const data = response.data as TraderSpotState;
             const meta = await this.fetchSpotMeta();
@@ -294,8 +299,11 @@ export default class HyperliquidAPI {
         if (cached) return JSON.parse(cached);
 
         try {
-            const operation = () => axios.post(this.api, { type: 'clearinghouseState', user, dex }, axiosConfig);
-            const response = await retryWithBackoff(operation);
+            const response = await this.client.post<any>('', {
+                type: 'clearinghouseState',
+                user,
+                dex
+            });
 
             const data = response.data as TraderPerpState;
             await this.redis.setEx(
@@ -410,8 +418,7 @@ export default class HyperliquidAPI {
         if (cached) return JSON.parse(cached);
 
         try {
-            const operation = () => axios.post(this.api, { type: 'l2Book', coin }, axiosConfig);
-            const response = await retryWithBackoff(operation);
+            const response = await this.client.post<any>('', { type: 'l2Book', coin });
             const data = response.data as L2BookResponse;
             await this.redis.setEx(cacheKey, 60, JSON.stringify(data));
             return data;
@@ -427,8 +434,7 @@ export default class HyperliquidAPI {
         if (cached) return JSON.parse(cached);
 
         try {
-            const operation = () => axios.post(this.api, { type: 'tokenDetails', tokenId }, axiosConfig);
-            const response = await retryWithBackoff(operation);
+            const response = await this.client.post<any>('', { type: 'tokenDetails', tokenId });
             const data = response.data as TokenDetails;
             await this.redis.setEx(cacheKey, config.monitor.cacheTTLMs / 1000, JSON.stringify(data));
             return data;

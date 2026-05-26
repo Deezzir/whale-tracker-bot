@@ -4,7 +4,7 @@ import Logger from '../common/logger';
 import { Browser, Page } from 'puppeteer';
 import ProxyService, { Proxy } from './proxies';
 import { sleep } from 'bun';
-import { retry } from '../common/retrier';
+import { retry } from '../common/utils';
 import { config } from '../config';
 
 const logger = new Logger('Screenshoter');

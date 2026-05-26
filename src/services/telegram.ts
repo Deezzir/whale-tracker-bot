@@ -3,8 +3,8 @@ import { config } from '../config';
 import Logger from '../common/logger';
 import { InlineKeyboardMarkup, InputFile } from 'telegraf/types';
 import { getRedisClient } from './redis';
-import { retry } from '../common/retrier';
 import { HyperliquidService, StakeService, PolymarketService, CoinglassService, trackerNames } from './trackers';
+import { retry } from '../common/utils';
 
 const logger = new Logger('Telegram');
 

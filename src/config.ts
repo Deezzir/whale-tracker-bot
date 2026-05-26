@@ -89,7 +89,14 @@ export const config = {
         batchFlushIntervalMs: 60 * 1000, // 1 minute
         cleanupTTLms: 5 * 24 * 60 * 60 * 1000, // 5 days
         trackedCheckIntervalMs: 30 * 60 * 1000, // 30 minutes
-        analyzeIntervalMs: 15 * 60 * 1000 // 15 minutes
+        analyzeIntervalMs: 15 * 60 * 1000, // 15 minutes
+        retry: {
+            maxAttempts: 3,
+            initialDelayMs: 1000,
+            backoffMultiplier: 2,
+            maxDelayMs: 30000
+        },
+        rateLimit: { requestsPerSecond: 1, burstCapacity: 3 }
     },
     stake: {
         minAlertBetUSD: parseFloat(optionalEnv('STAKE_MIN_BET_USD', '10000')),
@@ -116,7 +123,15 @@ export const config = {
         gammaApiRateLimit: 2,
         batchSize: 50,
         batchFlushIntervalMs: 10 * 1000, // 30 seconds
-        cleanupTTLms: 5 * 24 * 60 * 60 * 1000 // 5 days
+        cleanupTTLms: 5 * 24 * 60 * 60 * 1000, // 5 days
+        retry: {
+            maxAttempts: 3,
+            initialDelayMs: 1000,
+            backoffMultiplier: 2,
+            maxDelayMs: 30000
+        },
+        gammaRateLimit: { requestsPerSecond: 2 },
+        dataRateLimit: { requestsPerSecond: 5 }
     },
     db: {
         mongodbURI: optionalEnv('MONGODB_URI', 'mongodb://root:example@localhost:27017') as string,
@@ -146,7 +161,19 @@ export const config = {
     },
     coinglass: {
         apiKey: requireEnv('COINGLASS_API_KEY') as string,
-        api: 'https://open-api-v4.coinglass.com'
+        api: 'https://open-api-v4.coinglass.com',
+        retry: {
+            maxAttempts: 3,
+            initialDelayMs: 1000,
+            backoffMultiplier: 2,
+            maxDelayMs: 30000
+        },
+        rateLimit: {
+            requestsPerSecond: 5,
+            headerUsageKey: 'api-key-use-limit',
+            headerLimitKey: 'api-key-max-limit',
+            throttleThreshold: 0.9
+        }
     },
     oi: {
         coinglassExchanges: parseCoinglassExchanges(

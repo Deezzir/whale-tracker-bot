@@ -1,5 +1,5 @@
-import axios, { isAxiosError } from 'axios';
-import { RateLimiter } from '../../common/rate-limiter';
+import { isAxiosError } from 'axios';
+import { createApiClient, ApiClient } from '../../common/api-client';
 import { config } from '../../config';
 import { getRedisClient } from '../redis';
 import Logger from '../../common/logger';
@@ -67,27 +67,44 @@ const PAGE_SIZE = 100;
 const MAX_OFFSET = 3000;
 const REQ_TIMEOUT = 10 * 1000; // 10 seconds
 
-const axiosConfig = { headers: { 'Content-Type': 'application/json' }, timeout: REQ_TIMEOUT };
-
 export default class PolymarketAPIService {
-    private gammaLimiter = new RateLimiter(config.polymarket.gammaApiRateLimit);
-    private dataLimiter = new RateLimiter(config.polymarket.dataApiRateLimit);
+    private gammaClient: ApiClient;
+    private dataClient: ApiClient;
     private redis = getRedisClient();
 
     private marketCacheKey = (slug: string) => `gamma:market:${slug}`;
     private walletCacheKey = (proxyWallet: string) => `gamma:wallet:${proxyWallet}`;
     private walletStatsCacheKey = (proxyWallet: string) => `gamma:wallet-stats:${proxyWallet}`;
 
+    constructor() {
+        this.gammaClient = createApiClient({
+            name: this.constructor.name + '-Gamma',
+            baseURL: config.polymarket.gammaApi,
+            retry: config.polymarket.retry,
+            rateLimit: config.polymarket.gammaRateLimit,
+            headers: { 'Content-Type': 'application/json' },
+            timeout: REQ_TIMEOUT
+        });
+
+        this.dataClient = createApiClient({
+            name: this.constructor.name + '-Data',
+            baseURL: config.polymarket.dataApi,
+            retry: config.polymarket.retry,
+            rateLimit: config.polymarket.dataRateLimit,
+            headers: { 'Content-Type': 'application/json' },
+            timeout: REQ_TIMEOUT
+        });
+    }
+
     public async getMarketBySlug(slug: string): Promise<Market | null> {
         const cached = await this.redis.get(this.marketCacheKey(slug));
         if (cached === 'null') return null;
         if (cached) return JSON.parse(cached) as Market;
 
-        await this.gammaLimiter.acquire();
-
         try {
-            const url = `${config.polymarket.gammaApi}/markets/slug/${slug}`;
-            const result = await axios.get<Market>(url, { ...axiosConfig, params: { include_tag: true } });
+            const result = await this.gammaClient.get<Market>(`/markets/slug/${slug}`, {
+                params: { include_tag: true }
+            });
 
             await this.redis.setEx(
                 this.marketCacheKey(slug),
@@ -113,12 +130,8 @@ export default class PolymarketAPIService {
             return { date: parsed.date ? new Date(parsed.date) : null, nickname: parsed.nickname };
         }
 
-        await this.dataLimiter.acquire();
-
         try {
-            const url = `${config.polymarket.dataApi}/activity`;
-            const { data } = await axios.get<Trade[]>(url, {
-                ...axiosConfig,
+            const { data } = await this.dataClient.get<Trade[]>('/activity', {
                 params: {
                     user: proxyWallet,
                     sortBy: 'TIMESTAMP',
@@ -157,12 +170,8 @@ export default class PolymarketAPIService {
         const cached = await this.redis.get(this.walletStatsCacheKey(proxyWallet));
         if (cached) return JSON.parse(cached) as WalletStats;
 
-        await this.dataLimiter.acquire();
-
         try {
-            const url = `${config.polymarket.dataApi}/activity`;
-            const { data } = await axios.get<Trade[]>(url, {
-                ...axiosConfig,
+            const { data } = await this.dataClient.get<Trade[]>('/activity', {
                 params: {
                     user: proxyWallet,
                     sortBy: 'TIMESTAMP',
@@ -210,28 +219,14 @@ export default class PolymarketAPIService {
         let offset = 0;
 
         while (offset < MAX_OFFSET) {
-            await this.dataLimiter.acquire();
-
-            const params = new URLSearchParams({
-                limit: String(PAGE_SIZE),
-                offset: String(offset)
-            });
-
-            const url = `${config.polymarket.dataApi}/trades?${params}`;
-
             try {
-                const response = await fetch(url);
-                if (!response.ok) {
-                    logger.error(`Trades api error: ${response.status} ${response.statusText}`);
-                    break;
-                }
+                const { data } = await this.dataClient.get<Trade[]>('/trades', {
+                    params: { limit: PAGE_SIZE, offset }
+                });
 
-                const data: Trade[] = await response.json();
                 if (data.length === 0) break;
-
                 allTrades.push(...data);
                 offset += data.length;
-
                 if (data.length < PAGE_SIZE) break;
             } catch (err) {
                 logger.error('Trades fetch failed', err);

@@ -1,7 +1,6 @@
-import axios, { AxiosInstance, AxiosError } from 'axios';
 import { config } from '../../config';
 import Logger from '../../common/logger';
-import { retry } from '../../common/retrier';
+import { createApiClient, ApiClient } from '../../common/api-client';
 import { sleep } from '../../common/utils';
 
 const logger = new Logger('CoinglassAPI');
@@ -29,26 +28,17 @@ export interface ExchangePair {
     quoteAsset: string;
 }
 
-function isRetryable(error: any): boolean {
-    if (error instanceof AxiosError) {
-        const status = error.response?.status;
-        if (!status) return true;
-        if (status === 429) return true;
-        if (status >= 500) return true;
-    }
-    return false;
-}
-
 export type Interval = '1m' | '5m' | '15m' | '30m';
 
 export default class CoinglassAPI {
-    private client: AxiosInstance;
-    private rateLimitUsage = 0;
-    private rateLimitMax = 300;
+    private client: ApiClient;
 
     constructor() {
-        this.client = axios.create({
+        this.client = createApiClient({
+            name: this.constructor.name,
             baseURL: config.coinglass.api,
+            retry: config.coinglass.retry,
+            rateLimit: config.coinglass.rateLimit,
             headers: {
                 'Content-Type': 'application/json',
                 'CG-API-KEY': config.coinglass.apiKey,
@@ -56,23 +46,10 @@ export default class CoinglassAPI {
             },
             timeout: 15000
         });
-
-        this.client.interceptors.response.use((response) => {
-            const maxLimit = response.headers['api-key-max-limit'];
-            const useLimit = response.headers['api-key-use-limit'];
-            if (maxLimit) this.rateLimitMax = parseInt(maxLimit, 10);
-            if (useLimit) {
-                this.rateLimitUsage = parseInt(useLimit, 10);
-                if (this.rateLimitUsage > this.rateLimitMax * 0.8) {
-                    logger.warn(`Rate limit warning: ${this.rateLimitUsage}/${this.rateLimitMax} requests used`);
-                }
-            }
-            return response;
-        });
     }
 
     getRateLimitUsage(): { usage: number; max: number } {
-        return { usage: this.rateLimitUsage, max: this.rateLimitMax };
+        return this.client.getRateLimitUsage();
     }
 
     async fetchExchangePairs(exchange: string): Promise<ExchangePair[]> {
@@ -146,33 +123,19 @@ export default class CoinglassAPI {
     }
 
     private async request<T>(path: string, params: Record<string, any>): Promise<T> {
-        return retry(
-            async () => {
-                if (this.rateLimitUsage > this.rateLimitMax * 0.9) {
-                    logger.warn('Approaching rate limit, throttling for 2s');
-                    await sleep(2000);
-                }
+        const response = await this.client.get<any>(path, { params });
+        const body = response.data;
 
-                const response = await this.client.get(path, { params });
-                const body = response.data;
+        if (body.code !== '0') {
+            if (body.code === '429') {
+                logger.error(
+                    `Rate limited! Usage: ${this.client.getRateLimitUsage().usage}/${this.client.getRateLimitUsage().max}. Waiting 5s...`
+                );
+                await sleep(5000);
+            }
+            throw new Error(`CoinGlass API error: code=${body.code} msg=${body.msg}`);
+        }
 
-                if (body.code !== '0') {
-                    if (body.code === '429') {
-                        logger.error(`Rate limited! Usage: ${this.rateLimitUsage}/${this.rateLimitMax}. Waiting 5s...`);
-                        await sleep(5000);
-                    }
-                    throw new Error(`CoinGlass API error: code=${body.code} msg=${body.msg}`);
-                }
-
-                return body.data as T;
-            },
-            {
-                attempts: 3,
-                delayMs: 1000,
-                backoffMultiplier: 2,
-                shouldRetry: isRetryable
-            },
-            logger
-        );
+        return body.data as T;
     }
 }
