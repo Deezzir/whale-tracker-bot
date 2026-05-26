@@ -148,12 +148,12 @@ export default class TelegramService {
                 message: [
                     `<b>🟢 CoinGlass OI Anomaly Channel</b>`,
                     ``,
-                    `📊 Exchanges: <b>${config.coinglass.exchanges.join(', ')}</b>`,
-                    `⚡ Fast Spike: z > <b>${config.coinglass.zScoreThreshold}</b>`,
-                    `📈 Slow Accumulation: Σz > <b>${config.coinglass.cumulativeZThreshold}</b> (${config.coinglass.cumulativeZWindow} candles)`,
-                    `🔥 Sustained Build: CUSUM > <b>${config.coinglass.cusumThreshold}</b>`,
-                    `⏱ Cooldown: <b>${config.coinglass.cooldownSeconds / 3600}h</b>`,
-                    `🕐 Scan interval: <b>${config.coinglass.intervalMs / 60000}m</b>`
+                    `📊 Exchanges: <b>${config.oi.coinglassExchanges.join(', ')}</b>`,
+                    `⚡ Fast Spike: z > <b>${config.oi.zScoreThreshold}</b>`,
+                    `📈 Slow Accumulation: Σz > <b>${config.oi.cumulativeZThreshold}</b> (${config.oi.cumulativeZWindow} candles)`,
+                    `🔥 Sustained Build: CUSUM > <b>${config.oi.cusumThreshold}</b>`,
+                    `⏱ Cooldown: <b>${config.oi.cooldownSeconds / 3600}h</b>`,
+                    `🕐 Scan interval: <b>${config.oi.intervalMs / 60000}m</b>`
                 ].join('\n')
             }
         ];

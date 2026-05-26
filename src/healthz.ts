@@ -73,7 +73,7 @@ class HealthService {
     }
 
     stop() {
-        logger.info(`Stoping the server on port: ${this.port}`);
+        logger.info(`Stopping the server on port: ${this.port}`);
         if (this.checkInterval) clearInterval(this.checkInterval);
         this.server.close();
     }

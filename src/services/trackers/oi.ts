@@ -1,7 +1,7 @@
 import { Tracker } from '../../common/tracker';
 import { config } from '../../config';
 import APIService, { Interval, OICandle, PriceCandle } from '../api/coinglass';
-import DBService, { TriggerType, Severity } from '../db/coinglass';
+import DBService, { TriggerType, Severity } from '../db/oi';
 import { getRedisClient } from '../redis';
 import Tg from '../telegram';
 import { sleep } from '../../common/utils';
@@ -71,14 +71,14 @@ export function updatePairState(state: PairStatisticalState, newOIClose: number)
     state.candleCount++;
 
     // Update EWMA mean and variance
-    const alpha = config.coinglass.ewmaAlpha;
+    const alpha = config.oi.ewmaAlpha;
     state.ewmaMean = alpha * deltaOI + (1 - alpha) * state.ewmaMean;
     const diff = deltaOI - state.ewmaMean;
     state.ewmaVariance = alpha * diff * diff + (1 - alpha) * state.ewmaVariance;
 
     // Update recentDeltaOI ring buffer (keep last 192)
     state.recentDeltaOI.push(deltaOI);
-    if (state.recentDeltaOI.length > config.coinglass.ewmaLookback) {
+    if (state.recentDeltaOI.length > config.oi.ewmaLookback) {
         state.recentDeltaOI.shift();
     }
 
@@ -88,15 +88,15 @@ export function updatePairState(state: PairStatisticalState, newOIClose: number)
 
     // Update recentZScores ring buffer (keep last cumulativeZWindow)
     state.recentZScores.push(zScore);
-    if (state.recentZScores.length > config.coinglass.cumulativeZWindow) {
+    if (state.recentZScores.length > config.oi.cumulativeZWindow) {
         state.recentZScores.shift();
     }
 
     // Update CUSUM: S_t = max(0, S_{t-1} + (z_t - k))
-    state.cusumScore = Math.max(0, state.cusumScore + (zScore - config.coinglass.cusumDrift));
+    state.cusumScore = Math.max(0, state.cusumScore + (zScore - config.oi.cusumDrift));
 
     // Transition from WARMUP to READY
-    if (state.status === 'WARMUP' && state.candleCount >= config.coinglass.warmupCandles) {
+    if (state.status === 'WARMUP' && state.candleCount >= config.oi.warmupCandles) {
         state.status = 'READY';
     }
 }
@@ -104,7 +104,7 @@ export function updatePairState(state: PairStatisticalState, newOIClose: number)
 export function detectAnomaly(state: PairStatisticalState): Omit<OIAnomalyEvent, 'priceContext' | 'detectedAt'> | null {
     if (state.status !== 'READY') return null;
     if (state.recentZScores.length === 0) return null;
-    if ((state.lastOI || 0) < config.coinglass.minOIThreshold) return null;
+    if ((state.lastOI || 0) < config.oi.minOIThreshold) return null;
 
     const latestZ = state.recentZScores[state.recentZScores.length - 1];
     const previousOI =
@@ -117,11 +117,11 @@ export function detectAnomaly(state: PairStatisticalState): Omit<OIAnomalyEvent,
 
     // Global quality gates to reduce low-signal noise
     if (deltaOI <= 0) return null;
-    if (deltaOI < config.coinglass.minDeltaOIUsd) return null;
-    if (deltaOIPercent < config.coinglass.minDeltaOIPercent) return null;
+    if (deltaOI < config.oi.minDeltaOIUsd) return null;
+    if (deltaOIPercent < config.oi.minDeltaOIPercent) return null;
 
     // Check CUSUM first (CRITICAL severity)
-    if (state.cusumScore > config.coinglass.cusumThreshold) {
+    if (state.cusumScore > config.oi.cusumThreshold) {
         return {
             exchange: state.exchange,
             instrumentId: state.instrumentId,
@@ -137,9 +137,9 @@ export function detectAnomaly(state: PairStatisticalState): Omit<OIAnomalyEvent,
     }
 
     // Check cumulative z-score (sum over window)
-    if (state.recentZScores.length >= config.coinglass.cumulativeZWindow) {
+    if (state.recentZScores.length >= config.oi.cumulativeZWindow) {
         const cumulativeZ = state.recentZScores.reduce((sum, z) => sum + z, 0);
-        if (cumulativeZ > config.coinglass.cumulativeZThreshold) {
+        if (cumulativeZ > config.oi.cumulativeZThreshold) {
             return {
                 exchange: state.exchange,
                 instrumentId: state.instrumentId,
@@ -156,7 +156,7 @@ export function detectAnomaly(state: PairStatisticalState): Omit<OIAnomalyEvent,
     }
 
     // Check single-interval robust z-score (positive only - OI increases)
-    if (latestZ > config.coinglass.zScoreThreshold) {
+    if (latestZ > config.oi.zScoreThreshold) {
         return {
             exchange: state.exchange,
             instrumentId: state.instrumentId,
@@ -184,11 +184,11 @@ export function computePriceContext(priceCandles: PriceCandle[]): {
     const oldest = priceCandles[0].close;
     const latest = priceCandles[priceCandles.length - 1].close;
     const priceChangePercent = oldest > 0 ? ((latest - oldest) / oldest) * 100 : 0;
-    const isStealthPositioning = Math.abs(priceChangePercent) <= config.coinglass.stealthPriceThreshold;
+    const isStealthPositioning = Math.abs(priceChangePercent) <= config.oi.stealthPriceThreshold;
     return { priceChangePercent, isStealthPositioning };
 }
 
-export default class CoinglassService extends Tracker {
+export default class OIService extends Tracker {
     private api = new APIService();
     private pairStates = new Map<string, PairStatisticalState>();
     private warmupDone = false;
@@ -196,14 +196,15 @@ export default class CoinglassService extends Tracker {
 
     constructor(tg: Tg, channels: { chatId: number }[]) {
         super(tg, channels);
-        if (config.coinglass.exchanges.length === 0) throw new Error(`No exchanges provided for the CoinGlass tracker`);
+        if (config.oi.coinglassExchanges.length === 0)
+            throw new Error(`No exchanges provided for the CoinGlass tracker`);
     }
 
     async start(): Promise<void> {
         if (this.running) return;
         this.running = true;
         this.logger.info('Monitoring started');
-        this.logger.info(`Exchanges: [${config.coinglass.exchanges.join(', ')}]`);
+        this.logger.info(`Exchanges: [${config.oi.coinglassExchanges.join(', ')}]`);
 
         await this.refreshTokenUniverse();
         await this.coldStartWarmup();
@@ -232,7 +233,7 @@ export default class CoinglassService extends Tracker {
                     this.logger.error(`Failed to refresh the token universe: ${error}`);
                 }
                 if (!this.running) break;
-                await this.cancellableSleep(config.coinglass.refreshIntervalMs);
+                await this.cancellableSleep(config.oi.refreshIntervalMs);
             }
         };
 
@@ -244,25 +245,25 @@ export default class CoinglassService extends Tracker {
                     this.logger.error(`Failed to run a scan loop: ${error}`);
                 }
                 if (!this.running) break;
-                await this.cancellableSleep(config.coinglass.intervalMs);
+                await this.cancellableSleep(config.oi.intervalMs);
             }
         };
 
-        const alertNoDataLoop = this.watchDog(config.coinglass.noDataTimeoutMs);
-        const scanWatchDog = this.scanWatchDog(config.coinglass.scanStallTimeoutMs);
+        const alertNoDataLoop = this.watchDog(config.oi.noDataTimeoutMs);
+        const scanWatchDog = this.scanWatchDog(config.oi.scanStallTimeoutMs);
 
         await Promise.all([scanLoop(), refreshUniverseLoop(), alertNoDataLoop, scanWatchDog]);
     }
 
     private async refreshTokenUniverse(): Promise<void> {
         this.logger.info('Refreshing token universe...');
-        const blacklist = config.coinglass.blacklist;
+        const blacklist = config.oi.coinglassTokenBlacklist;
         if (blacklist.length > 0) {
             this.logger.info(`Blacklist active: ${blacklist.join(', ')} (${blacklist.length} tokens excluded)`);
         }
         let totalPairs = 0;
 
-        for (const exchange of config.coinglass.exchanges) {
+        for (const exchange of config.oi.coinglassExchanges) {
             try {
                 let pairs = await this.api.fetchExchangePairs(exchange);
                 await DBService.upsertInstrumentUniverse(exchange, pairs);
@@ -302,14 +303,14 @@ export default class CoinglassService extends Tracker {
 
         if (totalPairs === 0) throw new Error(`No pairs detected for Coinglass tracker`);
         this.logger.info(
-            `Universe refresh complete: ${totalPairs} total pairs across ${config.coinglass.exchanges.length} exchanges`
+            `Universe refresh complete: ${totalPairs} total pairs across ${config.oi.coinglassExchanges.length} exchanges`
         );
         this.lastDataTimestamp = Date.now();
     }
 
     private async coldStartWarmup(): Promise<void> {
         if (this.warmupDone) return;
-        const concurrency = config.coinglass.warmupConcurrency;
+        const concurrency = config.oi.warmupConcurrency;
         this.logger.info(
             `Starting cold-start warmup for ${this.pairStates.size} pairs (concurrency: ${concurrency})...`
         );
@@ -330,7 +331,7 @@ export default class CoinglassService extends Tracker {
                         state.exchange,
                         state.instrumentId,
                         this.defaultInterval,
-                        config.coinglass.warmupCandles
+                        config.oi.warmupCandles
                     );
 
                     if (candles.length > 0) {
@@ -398,7 +399,6 @@ export default class CoinglassService extends Tracker {
 
         for (const [pairKey, state] of readyPairs) {
             if (!this.running) break;
-
             try {
                 const anomaly = await this.evaluatePair(state);
                 if (anomaly) {
@@ -408,8 +408,7 @@ export default class CoinglassService extends Tracker {
             } catch (error) {
                 this.logger.error(`Error evaluating ${pairKey}: ${error}`);
             }
-
-            await sleep(100);
+            await sleep(150);
         }
 
         if (anomaliesDetected > 0) {
@@ -425,7 +424,7 @@ export default class CoinglassService extends Tracker {
             return null;
         }
 
-        if (state.status === 'DEGRADED_DATA' && state.candleCount >= config.coinglass.warmupCandles) {
+        if (state.status === 'DEGRADED_DATA' && state.candleCount >= config.oi.warmupCandles) {
             state.status = 'READY';
         }
 
@@ -539,13 +538,13 @@ export default class CoinglassService extends Tracker {
                         message_thread_id: channel.topicId
                     });
                 }
-                await redis.set(cooldownKey, event.severity, { EX: config.coinglass.cooldownSeconds });
+                await redis.set(cooldownKey, event.severity, { EX: config.oi.cooldownSeconds });
                 await DBService.insertAlert({
                     ...event,
                     sentAt: new Date(),
                     chatId: channel.chatId,
                     messageId,
-                    cooldownUntil: new Date(Date.now() + config.coinglass.cooldownSeconds * 1000)
+                    cooldownUntil: new Date(Date.now() + config.oi.cooldownSeconds * 1000)
                 } as any);
             } catch (error) {
                 this.logger.error(`Failed to send alert for ${event.exchange}:${event.instrumentId}: ${error}`);
@@ -598,11 +597,11 @@ export default class CoinglassService extends Tracker {
     private getThresholdForType(triggerType: TriggerType): string {
         switch (triggerType) {
             case 'FAST_SPIKE':
-                return `z>${config.coinglass.zScoreThreshold}`;
+                return `z>${config.oi.zScoreThreshold}`;
             case 'SLOW_ACCUMULATION':
-                return `Σz>${config.coinglass.cumulativeZThreshold}`;
+                return `Σz>${config.oi.cumulativeZThreshold}`;
             case 'SUSTAINED_BUILD':
-                return `CUSUM>${config.coinglass.cusumThreshold}`;
+                return `CUSUM>${config.oi.cusumThreshold}`;
         }
     }
 }

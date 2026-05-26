@@ -129,14 +129,17 @@ export const config = {
     },
     coinglass: {
         apiKey: requireEnv('COINGLASS_API_KEY') as string,
-        api: 'https://open-api-v4.coinglass.com',
-        exchanges: (process.env['COINGLASS_EXCHANGES'] || 'Hyperliquid,Aster,Gate,Bybit,Binance,OKX,Kraken')
+        api: 'https://open-api-v4.coinglass.com'
+    },
+    oi: {
+        coinglassExchanges: (process.env['COINGLASS_EXCHANGES'] || 'Gate,Bybit,Binance,OKX,Kraken')
             .split(',')
             .map((e) => e.trim()),
-        blacklist: process.env['COINGLASS_BLACKLIST']
+        coinglassTokenBlacklist: process.env['COINGLASS_BLACKLIST']
             ? process.env['COINGLASS_BLACKLIST'].split(',').map((t) => t.trim().toUpperCase())
             : [],
         warmupConcurrency: parseInt(optionalEnv('COINGLASS_WARMUP_CONCURRENCY', '4'), 10),
+        refreshIntervalMs: parseInt(optionalEnv('COINGLASS_REFRESH_INTERVAL_MS', '3600000'), 10),
         cooldownSeconds: 21600, // 6 hours
         ewmaLookback: 96, // 48 hours of 30m candles
         ewmaAlpha: 2 / (96 + 1), // ~0.02062
@@ -150,8 +153,7 @@ export const config = {
         cusumDrift: 1, // CUSUM drift parameter k
         stealthPriceThreshold: 2, // <=2% price move = stealth positioning
         warmupCandles: 96, // minimum candles before alerting
-        refreshIntervalMs: parseInt(optionalEnv('COINGLASS_REFRESH_INTERVAL_MS', '3600000'), 10),
-        intervalMs: 30 * 60 * 1000, // 30 minutes
+        intervalMs: 5 * 60 * 1000, // 30 minutes
         noDataTimeoutMs: 120 * 60 * 1000, // 2 hour
         scanStallTimeoutMs: 120 * 60 * 1000 // 2 hour
     }

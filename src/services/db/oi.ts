@@ -73,7 +73,7 @@ OIAlertRecordSchema.index({ exchange: 1, instrumentId: 1, sentAt: -1 });
 
 const OIAlertRecordModel = mongoose.model<IOIAlertRecord>('OIAlertRecord', OIAlertRecordSchema);
 
-export default class CoinglassDBService {
+export default class OIDBService {
     static async upsertInstrumentUniverse(
         exchange: string,
         instruments: { instrumentId: string; baseAsset: string; quoteAsset: string }[]

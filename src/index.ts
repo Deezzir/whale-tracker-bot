@@ -4,7 +4,7 @@ import {
     HyperliquidService,
     StakeService,
     PolymarketService,
-    CoinglassService,
+    CoinglassService as OIService,
     trackerNames
 } from './services/trackers';
 import Tg from './services/telegram';
@@ -53,8 +53,8 @@ function getEnabledTrackers(): Tracker[] {
                 case PolymarketService.name:
                     services.push(new PolymarketService(telegram, [{ chatId: config.telegram.polyChatID }]));
                     break;
-                case CoinglassService.name:
-                    services.push(new CoinglassService(telegram, [{ chatId: config.telegram.coinglassChatId }]));
+                case OIService.name:
+                    services.push(new OIService(telegram, [{ chatId: config.telegram.coinglassChatId }]));
                     break;
                 default:
                     logger.warn(`Unknown tracker name: ${trackerConfig.fullName}`);
