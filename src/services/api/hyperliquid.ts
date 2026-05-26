@@ -66,7 +66,7 @@ interface PortfolioStats {
 
 export type PortfolioResponse = Array<[string, PortfolioStats]>;
 
-interface PerpsMeta {
+export interface PerpsMeta {
     universe: {
         name: string;
         szDecimals: number;

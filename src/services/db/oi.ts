@@ -5,6 +5,7 @@ export interface IExchangeInstrument extends Document {
     instrumentId: string;
     baseAsset: string;
     quoteAsset: string;
+    source: 'COINGLASS' | 'HYPERLIQUID';
     lastRefreshedAt: Date;
     enabled: boolean;
 }
@@ -15,6 +16,7 @@ const ExchangeInstrumentSchema = new Schema<IExchangeInstrument>(
         instrumentId: { type: String, required: true },
         baseAsset: { type: String, required: true },
         quoteAsset: { type: String, required: true },
+        source: { type: String, required: true, enum: ['COINGLASS', 'HYPERLIQUID'], default: 'COINGLASS' },
         lastRefreshedAt: { type: Date, required: true },
         enabled: { type: Boolean, required: true, default: true }
     },
@@ -73,6 +75,45 @@ OIAlertRecordSchema.index({ exchange: 1, instrumentId: 1, sentAt: -1 });
 
 const OIAlertRecordModel = mongoose.model<IOIAlertRecord>('OIAlertRecord', OIAlertRecordSchema);
 
+export interface IOIObservation extends Document {
+    exchange: string;
+    instrumentId: string;
+    baseAsset: string;
+    quoteAsset: string;
+    source: 'COINGLASS' | 'HYPERLIQUID';
+    intervalStart: Date;
+    observedAt: Date;
+    openInterest: number;
+    rawOpenInterest?: number;
+    markPrice?: number;
+    midPrice?: number;
+    valid: boolean;
+    invalidReason?: string;
+}
+
+const OIObservationSchema = new Schema<IOIObservation>(
+    {
+        exchange: { type: String, required: true },
+        instrumentId: { type: String, required: true },
+        baseAsset: { type: String, required: true },
+        quoteAsset: { type: String, required: true },
+        source: { type: String, required: true, enum: ['COINGLASS', 'HYPERLIQUID'] },
+        intervalStart: { type: Date, required: true },
+        observedAt: { type: Date, required: true },
+        openInterest: { type: Number, required: true },
+        rawOpenInterest: { type: Number },
+        markPrice: { type: Number },
+        midPrice: { type: Number },
+        valid: { type: Boolean, required: true },
+        invalidReason: { type: String }
+    },
+    { timestamps: true }
+);
+
+OIObservationSchema.index({ exchange: 1, instrumentId: 1, intervalStart: 1 }, { unique: true });
+
+const OIObservationModel = mongoose.model<IOIObservation>('OIObservation', OIObservationSchema);
+
 export default class OIDBService {
     static async upsertInstrumentUniverse(
         exchange: string,
@@ -112,5 +153,48 @@ export default class OIDBService {
 
     static async insertAlert(record: Omit<IOIAlertRecord, keyof Document>): Promise<void> {
         await OIAlertRecordModel.create(record);
+    }
+
+    static async upsertOIObservations(
+        observations: Array<{
+            exchange: string;
+            instrumentId: string;
+            baseAsset: string;
+            quoteAsset: string;
+            source: 'COINGLASS' | 'HYPERLIQUID';
+            intervalStart: Date;
+            observedAt: Date;
+            openInterest: number;
+            rawOpenInterest?: number;
+            markPrice?: number;
+            midPrice?: number;
+            valid: boolean;
+            invalidReason?: string;
+        }>
+    ): Promise<number> {
+        if (observations.length === 0) return 0;
+
+        const ops = observations.map((obs) => ({
+            updateOne: {
+                filter: { exchange: obs.exchange, instrumentId: obs.instrumentId, intervalStart: obs.intervalStart },
+                update: { $set: obs },
+                upsert: true
+            }
+        }));
+
+        await OIObservationModel.bulkWrite(ops, { ordered: false });
+        return observations.length;
+    }
+
+    static async getRecentOIObservations(
+        exchange: string,
+        instrumentId: string,
+        limit: number
+    ): Promise<IOIObservation[]> {
+        const docs = await OIObservationModel.find({ exchange, instrumentId, valid: true })
+            .sort({ intervalStart: -1 })
+            .limit(limit)
+            .lean();
+        return docs.reverse();
     }
 }

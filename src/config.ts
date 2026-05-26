@@ -21,6 +21,23 @@ export enum Environment {
 const ASSETS_PATH = './resources';
 const runtimeEnv = optionalEnv('NODE_ENV', 'development') as Environment;
 
+function parseCoinglassExchanges(value: string): string[] {
+    const EXTERNALLY_MANAGED_OI_EXCHANGES = new Set(['hyperliquid', 'aster']);
+    const exchanges = value.split(',').map((e) => e.trim());
+    const invalidExchanges = exchanges.filter((exchange) =>
+        EXTERNALLY_MANAGED_OI_EXCHANGES.has(exchange.toLowerCase())
+    );
+
+    if (invalidExchanges.length > 0) {
+        throw new Error(
+            `COINGLASS_EXCHANGES cannot include externally managed exchanges: ${invalidExchanges.join(', ')}. ` +
+                'Remove them from COINGLASS_EXCHANGES.'
+        );
+    }
+
+    return exchanges;
+}
+
 // Config
 export const config = {
     env: runtimeEnv,
@@ -132,13 +149,13 @@ export const config = {
         api: 'https://open-api-v4.coinglass.com'
     },
     oi: {
-        coinglassExchanges: (process.env['COINGLASS_EXCHANGES'] || 'Gate,Bybit,Binance,OKX,Kraken')
-            .split(',')
-            .map((e) => e.trim()),
+        coinglassExchanges: parseCoinglassExchanges(
+            process.env['COINGLASS_EXCHANGES'] || 'Gate,Bybit,Binance,OKX,Kraken'
+        ),
         coinglassTokenBlacklist: process.env['COINGLASS_BLACKLIST']
             ? process.env['COINGLASS_BLACKLIST'].split(',').map((t) => t.trim().toUpperCase())
             : [],
-        warmupConcurrency: parseInt(optionalEnv('COINGLASS_WARMUP_CONCURRENCY', '4'), 10),
+        coinglassBackfillConcurrency: parseInt(optionalEnv('COINGLASS_BACKFILL_CONCURRENCY', '4'), 10),
         refreshIntervalMs: parseInt(optionalEnv('COINGLASS_REFRESH_INTERVAL_MS', '3600000'), 10),
         cooldownSeconds: 21600, // 6 hours
         ewmaLookback: 96, // 48 hours of 30m candles
@@ -155,6 +172,8 @@ export const config = {
         warmupCandles: 96, // minimum candles before alerting
         intervalMs: 5 * 60 * 1000, // 30 minutes
         noDataTimeoutMs: 120 * 60 * 1000, // 2 hour
-        scanStallTimeoutMs: 120 * 60 * 1000 // 2 hour
+        scanStallTimeoutMs: 120 * 60 * 1000, // 2 hour
+        hyperliquidDirectEnabled: optionalEnv('OI_HYPERLIQUID_DIRECT_ENABLED', 'true') === 'true',
+        hyperliquidIntervalMs: parseInt(optionalEnv('OI_HYPERLIQUID_INTERVAL_MS', '900000'), 10) // 15 minutes
     }
 } as const;

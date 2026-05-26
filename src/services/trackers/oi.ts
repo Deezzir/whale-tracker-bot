@@ -6,8 +6,10 @@ import { getRedisClient } from '../redis';
 import Tg from '../telegram';
 import { sleep } from '../../common/utils';
 import { InlineKeyboardMarkup } from 'telegraf/types';
+import HyperliquidAPI, { PerpsMeta } from '../api/hyperliquid';
 
 export type PairStatus = 'WARMUP' | 'READY' | 'DEGRADED_DATA';
+export type OISource = 'COINGLASS' | 'HYPERLIQUID';
 
 export interface PairStatisticalState {
     exchange: string;
@@ -19,8 +21,76 @@ export interface PairStatisticalState {
     recentDeltaOI: number[];
     recentZScores: number[];
     lastOI: number | null;
+    lastObservationAt: Date | null;
     candleCount: number;
     status: PairStatus;
+    source: OISource;
+}
+
+export interface HyperliquidOISnapshot {
+    exchange: 'Hyperliquid';
+    source: 'HYPERLIQUID';
+    instrumentId: string;
+    baseAsset: string;
+    quoteAsset: 'USD';
+    rawOpenInterest: number;
+    openInterest: number;
+    markPrice: number;
+    midPrice: number | null;
+    isDelisted: boolean;
+    observedAt: Date;
+}
+
+export function normalizeHLPerpContexts(meta: PerpsMeta): HyperliquidOISnapshot[] {
+    const now = new Date();
+    const snapshots: HyperliquidOISnapshot[] = [];
+
+    for (let i = 0; i < meta.universe.length; i++) {
+        const asset = meta.universe[i];
+        const ctx = meta.assetMeta[i];
+        if (!asset || !ctx) continue;
+
+        const isDelisted = !!(asset as { isDelisted?: boolean }).isDelisted;
+        if (isDelisted) continue;
+
+        const rawOpenInterest = parseFloat(ctx.openInterest);
+        const markPrice = parseFloat(ctx.markPx);
+        const midPx = parseFloat(ctx.midPx);
+
+        if (!isFinite(rawOpenInterest) || rawOpenInterest <= 0) continue;
+        if (!isFinite(markPrice) || markPrice <= 0) continue;
+
+        const midPrice = isFinite(midPx) && midPx > 0 ? midPx : null;
+        const openInterest = rawOpenInterest * markPrice;
+
+        snapshots.push({
+            exchange: 'Hyperliquid',
+            source: 'HYPERLIQUID',
+            instrumentId: asset.name,
+            baseAsset: asset.name,
+            quoteAsset: 'USD',
+            rawOpenInterest,
+            openInterest,
+            markPrice,
+            midPrice,
+            isDelisted: false,
+            observedAt: now
+        });
+    }
+
+    return snapshots;
+}
+
+export function normalizeIntervalStart(timestamp: number, intervalMs: number): Date {
+    return new Date(Math.floor(timestamp / intervalMs) * intervalMs);
+}
+
+export function isHyperliquidSource(source: OISource): boolean {
+    return source === 'HYPERLIQUID';
+}
+
+export function isCoinglassSource(source: OISource): boolean {
+    return source === 'COINGLASS';
 }
 
 export interface OIAnomalyEvent {
@@ -190,14 +260,15 @@ export function computePriceContext(priceCandles: PriceCandle[]): {
 
 export default class OIService extends Tracker {
     private api = new APIService();
+    private hlApi = new HyperliquidAPI();
     private pairStates = new Map<string, PairStatisticalState>();
-    private warmupDone = false;
+    private backfillDone = false;
     private defaultInterval: Interval = '30m';
 
     constructor(tg: Tg, channels: { chatId: number }[]) {
         super(tg, channels);
-        if (config.oi.coinglassExchanges.length === 0)
-            throw new Error(`No exchanges provided for the CoinGlass tracker`);
+        if (config.oi.coinglassExchanges.length === 0 && !config.oi.hyperliquidDirectEnabled)
+            throw new Error(`No exchanges provided for the CoinGlass tracker and Hyperliquid direct is disabled`);
     }
 
     async start(): Promise<void> {
@@ -205,30 +276,28 @@ export default class OIService extends Tracker {
         this.running = true;
         this.logger.info('Monitoring started');
         this.logger.info(`Exchanges: [${config.oi.coinglassExchanges.join(', ')}]`);
+        if (config.oi.hyperliquidDirectEnabled) {
+            this.logger.info(`Hyperliquid direct: enabled (interval: ${config.oi.hyperliquidIntervalMs}ms)`);
+        }
 
-        await this.refreshTokenUniverse();
-        await this.coldStartWarmup();
+        await this.refreshUniverse();
+        await this.backfill();
         this.monitorTask = this.mainLoop();
     }
 
     async stop(): Promise<void> {
-        if (this.running) {
-            this.running = false;
-            await this.monitorTask?.catch((error) => this.logger.error(`Error while awaiting monitor task: ${error}`));
-            this.monitorTask = undefined;
-            this.logger.info('Monitoring stopped');
-            this.logger.info(
-                `CoinglassService stopped. Final state: ${this.pairStates.size} pairs tracked, ` +
-                    `${[...this.pairStates.values()].filter((s) => s.status === 'READY').length} READY`
-            );
-        }
+        if (!this.running) return;
+        this.running = false;
+        await this.monitorTask?.catch((error) => this.logger.error(`Error while awaiting monitor task: ${error}`));
+        this.monitorTask = undefined;
+        this.logger.info('Monitoring stopped');
     }
 
     private async mainLoop(): Promise<void> {
         const refreshUniverseLoop = async () => {
             while (this.running) {
                 try {
-                    await this.refreshTokenUniverse();
+                    await this.refreshUniverse();
                 } catch (error) {
                     this.logger.error(`Failed to refresh the token universe: ${error}`);
                 }
@@ -237,10 +306,10 @@ export default class OIService extends Tracker {
             }
         };
 
-        const scanLoop = async () => {
+        const coinglassScanLoop = async () => {
             while (this.running) {
                 try {
-                    await this.scanAllPairs();
+                    await this.coinglassScanAllPairs();
                 } catch (error) {
                     this.logger.error(`Failed to run a scan loop: ${error}`);
                 }
@@ -249,18 +318,27 @@ export default class OIService extends Tracker {
             }
         };
 
+        const hlScanLoop = async () => {
+            if (!config.oi.hyperliquidDirectEnabled) return;
+            while (this.running) {
+                try {
+                    await this.hlScanAllPairs();
+                } catch (error) {
+                    this.logger.error(`Failed to run Hyperliquid scan cycle: ${error}`);
+                }
+                if (!this.running) break;
+                await this.cancellableSleep(config.oi.hyperliquidIntervalMs);
+            }
+        };
+
         const alertNoDataLoop = this.watchDog(config.oi.noDataTimeoutMs);
         const scanWatchDog = this.scanWatchDog(config.oi.scanStallTimeoutMs);
 
-        await Promise.all([scanLoop(), refreshUniverseLoop(), alertNoDataLoop, scanWatchDog]);
+        await Promise.all([coinglassScanLoop(), hlScanLoop(), refreshUniverseLoop(), alertNoDataLoop, scanWatchDog]);
     }
 
-    private async refreshTokenUniverse(): Promise<void> {
-        this.logger.info('Refreshing token universe...');
+    private async refreshCoinglassUniverse(): Promise<number> {
         const blacklist = config.oi.coinglassTokenBlacklist;
-        if (blacklist.length > 0) {
-            this.logger.info(`Blacklist active: ${blacklist.join(', ')} (${blacklist.length} tokens excluded)`);
-        }
         let totalPairs = 0;
 
         for (const exchange of config.oi.coinglassExchanges) {
@@ -286,8 +364,10 @@ export default class OIService extends Tracker {
                             recentDeltaOI: [],
                             recentZScores: [],
                             lastOI: null,
+                            lastObservationAt: null,
                             candleCount: 0,
-                            status: 'WARMUP'
+                            status: 'WARMUP',
+                            source: 'COINGLASS'
                         });
                     }
                 }
@@ -301,25 +381,87 @@ export default class OIService extends Tracker {
             }
         }
 
-        if (totalPairs === 0) throw new Error(`No pairs detected for Coinglass tracker`);
-        this.logger.info(
-            `Universe refresh complete: ${totalPairs} total pairs across ${config.oi.coinglassExchanges.length} exchanges`
-        );
+        return totalPairs;
+    }
+
+    private async refreshHyperliquidUniverse(): Promise<number> {
+        if (!config.oi.hyperliquidDirectEnabled) return 0;
+
+        const blacklist = config.oi.coinglassTokenBlacklist;
+        let totalPairs = 0;
+
+        try {
+            const meta = await this.hlApi.fetchPerpMeta();
+            if (!meta || !meta.universe || !meta.assetMeta) {
+                throw new Error('Invalid Hyperliquid meta response');
+            }
+            const snapshots = normalizeHLPerpContexts(meta);
+            const instruments = snapshots.map((snap) => ({
+                instrumentId: snap.instrumentId,
+                baseAsset: snap.baseAsset,
+                quoteAsset: 'USD' as const
+            }));
+            await DBService.upsertInstrumentUniverse('Hyperliquid', instruments);
+
+            const allCount = snapshots.length;
+            const filtered =
+                blacklist.length > 0
+                    ? snapshots.filter((s) => !blacklist.includes(s.baseAsset.toUpperCase()))
+                    : snapshots;
+
+            for (const snap of filtered) {
+                const key = `Hyperliquid:${snap.instrumentId}`;
+                if (!this.pairStates.has(key)) {
+                    this.pairStates.set(key, {
+                        exchange: 'Hyperliquid',
+                        instrumentId: snap.instrumentId,
+                        baseAsset: snap.baseAsset,
+                        ewmaMean: 0,
+                        ewmaVariance: 0,
+                        cusumScore: 0,
+                        recentDeltaOI: [],
+                        recentZScores: [],
+                        lastOI: null,
+                        lastObservationAt: null,
+                        candleCount: 0,
+                        status: 'WARMUP',
+                        source: 'HYPERLIQUID'
+                    });
+                }
+            }
+
+            totalPairs += filtered.length;
+            this.logger.info(
+                `Hyperliquid: ${filtered.length} pairs loaded${blacklist.length > 0 ? ` (filtered from ${allCount})` : ''}`
+            );
+        } catch (error) {
+            this.logger.error(`Failed to refresh Hyperliquid: ${error}`);
+        }
+
+        return totalPairs;
+    }
+
+    private async refreshUniverse(): Promise<void> {
+        this.logger.info('Refreshing token universe...');
+        const blacklist = config.oi.coinglassTokenBlacklist;
+        if (blacklist.length > 0) this.logger.info(`Blacklist (${blacklist.length} tokens excluded)`);
+
+        const result = await Promise.all([this.refreshCoinglassUniverse(), this.refreshHyperliquidUniverse()]);
+        const totalPairs = result.reduce((sum, count) => sum + count, 0);
+
+        if (totalPairs === 0) throw new Error(`No pairs detected for OI tracker`);
+        this.logger.info(`Universe refresh complete: ${totalPairs} total pairs`);
         this.lastDataTimestamp = Date.now();
     }
 
-    private async coldStartWarmup(): Promise<void> {
-        if (this.warmupDone) return;
-        const concurrency = config.oi.warmupConcurrency;
-        this.logger.info(
-            `Starting cold-start warmup for ${this.pairStates.size} pairs (concurrency: ${concurrency})...`
-        );
-
-        let warmedUp = 0;
+    private async coinglassBackfill(
+        entries: [string, PairStatisticalState][],
+        startTime: number
+    ): Promise<{ filled: number; failed: number; rateLimited: number }> {
+        const concurrency = config.oi.coinglassBackfillConcurrency;
+        let filled = 0;
         let failed = 0;
         let rateLimited = 0;
-        const entries = [...this.pairStates.entries()];
-        const startTime = Date.now();
 
         for (let i = 0; i < entries.length; i += concurrency) {
             if (!this.running) break;
@@ -345,7 +487,7 @@ export default class OIService extends Tracker {
             for (let j = 0; j < results.length; j++) {
                 const result = results[j];
                 if (result.status === 'fulfilled' && result.value === 'ok') {
-                    warmedUp++;
+                    filled++;
                 } else if (result.status === 'rejected') {
                     const errMsg = String(result.reason);
                     if (errMsg.includes('429') || errMsg.includes('Too Many')) {
@@ -361,38 +503,241 @@ export default class OIService extends Tracker {
                 const { usage, max } = this.api.getRateLimitUsage();
                 const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
                 this.logger.info(
-                    `Warmup progress: ${processed}/${entries.length} (${warmedUp} ok, ${failed} failed, ${rateLimited} rate-limited) [${elapsed}s elapsed, API: ${usage}/${max}]`
+                    `Backfill progress (CoinGlass): ${processed}/${entries.length} (${filled} ok, ${failed} failed, ${rateLimited} rate-limited) [${elapsed}s elapsed, API: ${usage}/${max}]`
                 );
             }
 
-            // Delay between batches to respect rate limits
             await sleep(1200);
         }
 
-        this.warmupDone = true;
+        return { filled, failed, rateLimited };
+    }
+
+    private async hyperliquidBackfill(
+        entries: [string, PairStatisticalState][],
+        startTime: number
+    ): Promise<{ filled: number; failed: number; rateLimited: number }> {
+        let filled = 0;
+        let failed = 0;
+        let rateLimited = 0;
+
+        for (const [, state] of entries) {
+            if (!this.running) break;
+            try {
+                const observations = await DBService.getRecentOIObservations(
+                    state.exchange,
+                    state.instrumentId,
+                    config.oi.warmupCandles
+                );
+                if (observations.length > 0) {
+                    this.replayDBHistory(
+                        state,
+                        observations.map((o) => ({ openInterest: o.openInterest, intervalStart: o.intervalStart }))
+                    );
+                    filled++;
+                }
+            } catch (error) {
+                failed++;
+                state.status = 'DEGRADED_DATA';
+                this.logger.error(`Warmup failed for Hyperliquid:${state.instrumentId}: ${error}`);
+            }
+        }
+
+        const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+        if (entries.length > 0) {
+            this.logger.info(
+                `Warmup progress (Hyperliquid): ${entries.length} pairs replayed from local history (${filled} ok, ${failed} failed) [${elapsed}s elapsed]`
+            );
+        }
+
+        return { filled, failed, rateLimited };
+    }
+
+    private async backfill(): Promise<void> {
+        if (this.backfillDone) return;
+        this.logger.info(`Starting backfill for ${this.pairStates.size} pairs...`);
+
+        const entries = [...this.pairStates.entries()];
+        const coinglassEntries = entries.filter(([, s]) => isCoinglassSource(s.source));
+        const hyperliquidEntries = entries.filter(([, s]) => isHyperliquidSource(s.source));
+        const startTime = Date.now();
+
+        const result = await Promise.all([
+            this.coinglassBackfill(coinglassEntries, startTime),
+            this.hyperliquidBackfill(hyperliquidEntries, startTime)
+        ]);
+        const filled = result.reduce((sum, r) => sum + r.filled, 0);
+        const failed = result.reduce((sum, r) => sum + r.failed, 0);
+        const rateLimited = result.reduce((sum, r) => sum + r.rateLimited, 0);
+
+        this.backfillDone = true;
         const readyCount = [...this.pairStates.values()].filter((s) => s.status === 'READY').length;
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
         this.logger.info(
-            `Warmup complete in ${elapsed}s: ${warmedUp} warmed, ${readyCount} READY, ${failed} failed (${rateLimited} rate-limited)`
+            `Backfill complete in ${elapsed}s: ${filled} filled, ${readyCount} ready, ${failed} failed (${rateLimited} rate-limited)`
         );
         this.lastDataTimestamp = Date.now();
     }
 
     private replayHistory(state: PairStatisticalState, candles: OICandle[]): void {
-        for (const candle of candles) {
-            updatePairState(state, candle.close);
-        }
-        // Reset CUSUM after warmup — historical data is for calibrating EWMA, not triggering
+        for (const candle of candles) updatePairState(state, candle.close);
         state.cusumScore = 0;
         state.recentZScores = [];
     }
 
-    private async scanAllPairs(): Promise<void> {
-        if (!this.running) return;
-        this.lastScanTimestamp = Date.now();
+    private replayDBHistory(
+        state: PairStatisticalState,
+        observations: { openInterest: number; intervalStart: Date }[]
+    ): void {
+        for (const obs of observations) updatePairState(state, obs.openInterest);
+        state.cusumScore = 0;
+        state.recentZScores = [];
+        if (observations.length > 0) {
+            state.lastObservationAt = observations[observations.length - 1].intervalStart;
+        }
+    }
 
+    private async computeHLPriceContext(instrumentId: string): Promise<{
+        priceChangePercent: number | null;
+        isStealthPositioning: boolean;
+    }> {
+        try {
+            const recent = await DBService.getRecentOIObservations('Hyperliquid', instrumentId, 4);
+            const prices = recent.filter((o) => o.markPrice != null && o.markPrice > 0).map((o) => o.markPrice!);
+            if (prices.length < 2) return { priceChangePercent: null, isStealthPositioning: false };
+            const oldest = prices[0];
+            const latest = prices[prices.length - 1];
+            const priceChangePercent = oldest > 0 ? ((latest - oldest) / oldest) * 100 : 0;
+            const isStealthPositioning = Math.abs(priceChangePercent) <= config.oi.stealthPriceThreshold;
+            return { priceChangePercent, isStealthPositioning };
+        } catch {
+            return { priceChangePercent: null, isStealthPositioning: false };
+        }
+    }
+
+    private async hlScanAllPairs(): Promise<void> {
+        if (!this.running) return;
+
+        const cycleStart = Date.now();
+        const meta = await this.hlApi.fetchPerpMeta();
+        if (!meta || !meta.universe || !meta.assetMeta) {
+            this.logger.error('Invalid Hyperliquid meta response, skipping cycle');
+            return;
+        }
+        const snapshots = normalizeHLPerpContexts(meta);
+        if (snapshots.length === 0) {
+            this.logger.warn('Hyperliquid collection failed: no snapshots returned, skipping cycle');
+            return;
+        }
+
+        const snapshotMap = new Map<string, HyperliquidOISnapshot>();
+        for (const snap of snapshots) snapshotMap.set(snap.instrumentId, snap);
+
+        const intervalStart = normalizeIntervalStart(Date.now(), config.oi.hyperliquidIntervalMs);
+        const now = new Date();
+
+        const observations: Array<{
+            exchange: string;
+            instrumentId: string;
+            baseAsset: string;
+            quoteAsset: string;
+            source: 'HYPERLIQUID';
+            intervalStart: Date;
+            observedAt: Date;
+            openInterest: number;
+            rawOpenInterest: number;
+            markPrice: number;
+            midPrice?: number;
+            valid: boolean;
+        }> = [];
+
+        const hlPairs = [...this.pairStates.entries()].filter(
+            ([, s]) => isHyperliquidSource(s.source) && (s.status === 'READY' || s.status === 'WARMUP')
+        );
+
+        let stored = 0;
+        let skipped = 0;
+        let anomaliesDetected = 0;
+
+        for (const [, state] of hlPairs) {
+            const snap = snapshotMap.get(state.instrumentId);
+            if (!snap || snap.isDelisted || snap.openInterest <= 0) {
+                skipped++;
+                continue;
+            }
+
+            observations.push({
+                exchange: snap.exchange,
+                instrumentId: snap.instrumentId,
+                baseAsset: snap.baseAsset,
+                quoteAsset: snap.quoteAsset,
+                source: 'HYPERLIQUID',
+                intervalStart,
+                observedAt: now,
+                openInterest: snap.openInterest,
+                rawOpenInterest: snap.rawOpenInterest,
+                markPrice: snap.markPrice,
+                midPrice: snap.midPrice ?? undefined,
+                valid: true
+            });
+        }
+
+        if (observations.length > 0) {
+            stored = await DBService.upsertOIObservations(observations);
+        }
+
+        for (const [pairKey, state] of hlPairs) {
+            if (!this.running) break;
+            const snap = snapshotMap.get(state.instrumentId);
+            if (!snap || snap.isDelisted || snap.openInterest <= 0) continue;
+
+            try {
+                if (state.status === 'DEGRADED_DATA' && state.candleCount >= config.oi.warmupCandles) {
+                    state.status = 'READY';
+                }
+
+                updatePairState(state, snap.openInterest);
+                state.lastObservationAt = intervalStart;
+
+                const detection = detectAnomaly(state);
+                if (detection) {
+                    anomaliesDetected++;
+                    state.cusumScore = 0;
+                    this.lastDataTimestamp = Date.now();
+
+                    const priceContext = await this.computeHLPriceContext(state.instrumentId);
+
+                    await this.sendAlert({
+                        ...detection,
+                        priceContext,
+                        detectedAt: new Date()
+                    });
+                }
+            } catch (error) {
+                this.logger.error(`Error evaluating Hyperliquid pair ${pairKey}: ${error}`);
+            }
+        }
+
+        this.lastScanTimestamp = Date.now();
+        this.lastDataTimestamp = Date.now();
+        const cycleDuration = Date.now() - cycleStart;
+        const allHlStates = [...this.pairStates.values()].filter((s) => isHyperliquidSource(s.source));
+        const ready = allHlStates.filter((s) => s.status === 'READY').length;
+        const warming = allHlStates.filter((s) => s.status === 'WARMUP').length;
+        const degraded = allHlStates.filter((s) => s.status === 'DEGRADED_DATA').length;
+
+        this.logger.info(
+            `Hyperliquid scan complete: ${hlPairs.length} attempted, ${stored} stored, ${skipped} skipped, ${anomaliesDetected} anomalies [${cycleDuration}ms] | ` +
+                `Status: ${ready} READY, ${warming} WARMUP, ${degraded} DEGRADED`
+        );
+    }
+
+    private async coinglassScanAllPairs(): Promise<void> {
+        if (!this.running) return;
+
+        const cycleStart = Date.now();
         const readyPairs = [...this.pairStates.entries()].filter(
-            ([, s]) => s.status === 'READY' || s.status === 'WARMUP'
+            ([, s]) => (s.status === 'READY' || s.status === 'WARMUP') && isCoinglassSource(s.source)
         );
 
         let anomaliesDetected = 0;
@@ -411,9 +756,17 @@ export default class OIService extends Tracker {
             await sleep(150);
         }
 
-        if (anomaliesDetected > 0) {
-            this.logger.info(`Scan complete: ${anomaliesDetected} anomalies detected`);
-        }
+        this.lastScanTimestamp = Date.now();
+        const cycleDuration = Date.now() - cycleStart;
+        const allHlStates = [...this.pairStates.values()].filter((s) => isCoinglassSource(s.source));
+        const ready = allHlStates.filter((s) => s.status === 'READY').length;
+        const warming = allHlStates.filter((s) => s.status === 'WARMUP').length;
+        const degraded = allHlStates.filter((s) => s.status === 'DEGRADED_DATA').length;
+
+        this.logger.info(
+            `Coinglass scan complete: ${readyPairs.length} pairs scanned, ${anomaliesDetected} anomalies [${cycleDuration}ms] | ` +
+                `Status: ${ready} READY, ${warming} WARMUP, ${degraded} DEGRADED`
+        );
     }
 
     private async evaluatePair(state: PairStatisticalState): Promise<OIAnomalyEvent | null> {
@@ -578,10 +931,6 @@ export default class OIService extends Tracker {
             lines.push(
                 `${priceDir} Price: ${event.priceContext.priceChangePercent >= 0 ? '+' : ''}${event.priceContext.priceChangePercent.toFixed(2)}%`
             );
-        }
-
-        if (event.priceContext.isStealthPositioning) {
-            lines.push(``, `🕵️ <b>STEALTH POSITIONING</b> — OI anomaly with flat price (≤2% move)`);
         }
 
         lines.push(``, `🕐 ${event.detectedAt.toISOString().replace('T', ' ').slice(0, 19)} UTC`);
