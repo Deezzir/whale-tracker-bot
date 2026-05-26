@@ -92,10 +92,12 @@ Create a `.env` file in the project root.
 | `PUPPETEER_PROXIES` | `` | Comma-separated proxy list |
 | `OPENROUTER_CLASSIFIER_PROMPT_TEMPLATE_PATH` | `./resources/trade_classifier_prompt.txt` | Prompt template path |
 | `OPENROUTER_FAST_MODEL` | `gpt-3.5-turbo` | OpenRouter model used for fast classification |
-| `COINGLASS_EXCHANGES` | `Binance,OKX,Bybit` | Comma-separated exchanges to monitor |
+| `COINGLASS_EXCHANGES` | `Gate,Bybit,Binance,OKX,Kraken` | Comma-separated CoinGlass exchanges to monitor. Do not include `Hyperliquid` or `Aster`; they are managed by direct sources. |
 | `COINGLASS_REFRESH_INTERVAL_MS` | `3600000` | Token universe refresh interval (1h) |
 | `COINGLASS_BLACKLIST` | `` | Comma-separated tokens to exclude from OI detection |
 | `COINGLASS_WARMUP_CONCURRENCY` | `4` | Parallel warmup batch size |
+| `OI_HYPERLIQUID_DIRECT_ENABLED` | `true` | Enable direct Hyperliquid OI collection |
+| `OI_HYPERLIQUID_INTERVAL_MS` | `900000` | Hyperliquid OI collection interval (15 min) |
 
 ## Run locally
 

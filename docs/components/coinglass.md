@@ -61,6 +61,32 @@ On restart, fetches 96 candles (48h at 30m intervals) per pair from CoinGlass AP
 - Warmup parallelized with configurable concurrency (default 5) and 1.2s batch delays
 - 429 detection with 5s backoff; throttles at 90% rate budget usage
 
+## Hyperliquid Direct OI Source
+
+Hyperliquid pairs are collected directly from the Hyperliquid API rather than through CoinGlass. This avoids CoinGlass plan limitations and provides native data access.
+
+### Source Routing
+
+- **Hyperliquid pairs**: collected via direct Hyperliquid API (`OI_HYPERLIQUID_DIRECT_ENABLED=true`)
+- **All other exchanges**: collected via CoinGlass API as before
+- `COINGLASS_EXCHANGES` must **not** include `Hyperliquid` or `Aster` — a config guard rejects startup if they are present
+
+### Collection Interval
+
+Hyperliquid direct source runs on a **15-minute** cycle (`OI_HYPERLIQUID_INTERVAL_MS=900000`), independent of the CoinGlass 30-minute scan cycle.
+
+### Warmup
+
+On first deployment (or after data loss), Hyperliquid pairs warm up from **local MongoDB history only** — there is no backfill from external sources. A pair needs 96 intervals (~24h at 15min) of local observations before it can trigger alerts.
+
+### Detection
+
+Same anomaly detection pipeline (EWMA/MAD/CUSUM), same alert format, same cooldown. Alerts link to `https://app.hyperliquid.xyz/trade/{baseAsset}` instead of Coinalyze.
+
+### Persistence
+
+OI observations are stored in the `oiobservations` MongoDB collection with index `{exchange, instrumentId, intervalStart}`.
+
 ## Files
 
 - `src/services/api/coinglass.ts` — HTTP client

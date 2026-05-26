@@ -91,6 +91,16 @@ Action:
 2. Confirm bot admin permissions in target group.
 3. Check `checkMessageSource` constraints for command handlers.
 
+### Hyperliquid Direct OI Source
+
+**First deployment**: Hyperliquid pairs will not alert until warmup completes (96 intervals = ~24h at 15min). This is expected — there is no external backfill.
+
+**Failed cycles**: If a Hyperliquid OI collection cycle fails, a warning is logged and the next cycle retries automatically. No manual intervention needed unless failures persist.
+
+**Storage growth**: The `oiobservations` MongoDB collection grows over time as observations accumulate. Monitor collection size periodically; consider TTL or manual cleanup for old data if needed.
+
+**Verify status**: Check cycle logs for Hyperliquid OI tracker output showing pair state counts (READY/WARMUP/DEGRADED). After ~24h all pairs should transition to READY.
+
 ## Safe Ops Practices
 
 - Do not log or commit secrets.

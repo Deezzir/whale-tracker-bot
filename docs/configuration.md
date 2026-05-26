@@ -93,10 +93,12 @@ OpenRouter:
 
 CoinGlass OI Anomaly Tracker:
 
-- `COINGLASS_EXCHANGES` (default: `Binance,OKX,Bybit`)
+- `COINGLASS_EXCHANGES` (default: `Gate,Bybit,Binance,OKX,Kraken`; do not include `Hyperliquid` or `Aster`, which are managed by direct sources)
 - `COINGLASS_REFRESH_INTERVAL_MS` (default: `3600000` / 1h)
 - `COINGLASS_BLACKLIST` (default: empty — comma-separated tokens to exclude from detection)
 - `COINGLASS_WARMUP_CONCURRENCY` (default: `4` — parallel warmup batch size)
+- `OI_HYPERLIQUID_DIRECT_ENABLED` (default: `true` — enable direct Hyperliquid OI collection)
+- `OI_HYPERLIQUID_INTERVAL_MS` (default: `900000` / 15min — Hyperliquid OI collection interval)
 
 ### CoinGlass Detection Parameters (hardcoded in config.ts)
 
