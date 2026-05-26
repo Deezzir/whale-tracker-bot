@@ -207,6 +207,7 @@ export const config = {
         intervalMs: 5 * 60 * 1000, // 30 minutes
         noDataTimeoutMs: 120 * 60 * 1000, // 2 hour
         scanStallTimeoutMs: 120 * 60 * 1000, // 2 hour
+        cleanupTTLms: 5 * 24 * 60 * 60 * 1000, // 5 days
         hyperliquidDirectEnabled: optionalEnv('OI_HYPERLIQUID_DIRECT_ENABLED', 'true') === 'true',
         hyperliquidIntervalMs: parseInt(optionalEnv('OI_HYPERLIQUID_INTERVAL_MS', '900000'), 10) // 15 minutes
     }

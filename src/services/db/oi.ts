@@ -197,4 +197,16 @@ export default class OIDBService {
             .lean();
         return docs.reverse();
     }
+
+    static async cleanOldObservations(ttlMs: number): Promise<number> {
+        const cutoff = new Date(Date.now() - ttlMs);
+        const result = await OIObservationModel.deleteMany({ intervalStart: { $lt: cutoff } });
+        return result.deletedCount;
+    }
+
+    static async cleanOldAlerts(ttlMs: number): Promise<number> {
+        const cutoff = new Date(Date.now() - ttlMs);
+        const result = await OIAlertRecordModel.deleteMany({ sentAt: { $lt: cutoff } });
+        return result.deletedCount;
+    }
 }

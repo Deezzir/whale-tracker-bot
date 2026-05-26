@@ -331,10 +331,26 @@ export default class OIService extends Tracker {
             }
         };
 
+        const cleanupLoop = async () => {
+            while (this.running) {
+                try {
+                    const deletedObs = await DBService.cleanOldObservations(config.oi.cleanupTTLms);
+                    const deletedAlerts = await DBService.cleanOldAlerts(config.oi.cleanupTTLms);
+                    if (deletedObs > 0 || deletedAlerts > 0) {
+                        this.logger.info(`Cleanup: deleted ${deletedObs} old observations, ${deletedAlerts} old alerts`);
+                    }
+                } catch (error) {
+                    this.logger.error(`Failed to cleanup: ${error}`);
+                }
+                if (!this.running) break;
+                await this.cancellableSleep(config.monitor.cleanupIntervalMs);
+            }
+        };
+
         const alertNoDataLoop = this.watchDog(config.oi.noDataTimeoutMs);
         const scanWatchDog = this.scanWatchDog(config.oi.scanStallTimeoutMs);
 
-        await Promise.all([coinglassScanLoop(), hlScanLoop(), refreshUniverseLoop(), alertNoDataLoop, scanWatchDog]);
+        await Promise.all([coinglassScanLoop(), hlScanLoop(), cleanupLoop(), refreshUniverseLoop(), alertNoDataLoop, scanWatchDog]);
     }
 
     private async refreshCoinglassUniverse(): Promise<number> {
