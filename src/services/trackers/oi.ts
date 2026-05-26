@@ -457,60 +457,137 @@ export default class OIService extends Tracker {
     private async coinglassBackfill(
         entries: [string, PairStatisticalState][],
         startTime: number
-    ): Promise<{ filled: number; failed: number; rateLimited: number }> {
-        const concurrency = config.oi.coinglassBackfillConcurrency;
+    ): Promise<{ filled: number; failed: number; rateLimited: number; retried: number }> {
+        const minConcurrency = config.oi.coinglassBackfillMinConcurrency;
+        const maxConcurrency = config.oi.coinglassBackfillMaxConcurrency;
+        const retryBudget = config.oi.coinglassBackfillRetryBudget;
+
         let filled = 0;
         let failed = 0;
         let rateLimited = 0;
+        let retried = 0;
+        let currentConcurrency = config.oi.coinglassBackfillConcurrency;
 
-        for (let i = 0; i < entries.length; i += concurrency) {
-            if (!this.running) break;
+        const queue = [...entries];
+        const retryQueue: [string, PairStatisticalState][] = [];
 
-            const batch = entries.slice(i, i + concurrency);
-            const results = await Promise.allSettled(
-                batch.map(async ([, state]) => {
-                    const candles = await this.api.fetchOIHistory(
-                        state.exchange,
-                        state.instrumentId,
-                        this.defaultInterval,
-                        config.oi.warmupCandles
-                    );
+        let windowRequests = 0;
+        let windowRateLimited = 0;
+        const ADAPT_WINDOW = 20;
 
-                    if (candles.length > 0) {
-                        this.replayHistory(state, candles);
-                        return 'ok';
-                    }
-                    return 'empty';
-                })
-            );
-
-            for (let j = 0; j < results.length; j++) {
-                const result = results[j];
-                if (result.status === 'fulfilled' && result.value === 'ok') {
-                    filled++;
-                } else if (result.status === 'rejected') {
-                    const errMsg = String(result.reason);
-                    if (errMsg.includes('429') || errMsg.includes('Too Many')) {
-                        rateLimited++;
-                    }
-                    failed++;
-                    batch[j][1].status = 'DEGRADED_DATA';
-                }
-            }
-
-            const processed = Math.min(i + concurrency, entries.length);
-            if (processed % (concurrency * 10) === 0 || processed === entries.length) {
-                const { usage, max } = this.api.getRateLimitUsage();
-                const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-                this.logger.info(
-                    `Backfill progress (CoinGlass): ${processed}/${entries.length} (${filled} ok, ${failed} failed, ${rateLimited} rate-limited) [${elapsed}s elapsed, API: ${usage}/${max}]`
+        const processOne = async (
+            entry: [string, PairStatisticalState]
+        ): Promise<'ok' | 'empty' | 'retry' | 'failed'> => {
+            const [, state] = entry;
+            try {
+                const candles = await this.api.fetchOIHistory(
+                    state.exchange,
+                    state.instrumentId,
+                    this.defaultInterval,
+                    config.oi.warmupCandles
                 );
+                if (candles.length > 0) {
+                    this.replayHistory(state, candles);
+                    return 'ok';
+                }
+                return 'empty';
+            } catch (error) {
+                const errMsg = String(error);
+                if (
+                    errMsg.includes('429') ||
+                    errMsg.includes('Too Many') ||
+                    errMsg.includes('ECONNRESET') ||
+                    errMsg.includes('ETIMEDOUT') ||
+                    errMsg.includes('status code 5')
+                ) {
+                    return 'retry';
+                }
+                return 'failed';
             }
+        };
 
-            await sleep(1200);
+        const adaptConcurrency = (wasRateLimited: boolean) => {
+            if (wasRateLimited) windowRateLimited++;
+            windowRequests++;
+            if (windowRequests >= ADAPT_WINDOW) {
+                const ratio = windowRateLimited / windowRequests;
+                if (ratio > 0.1 && currentConcurrency > minConcurrency) {
+                    currentConcurrency--;
+                } else if (ratio < 0.02 && currentConcurrency < maxConcurrency) {
+                    currentConcurrency++;
+                }
+                windowRequests = 0;
+                windowRateLimited = 0;
+            }
+        };
+
+        const runPool = async (q: [string, PairStatisticalState][], isRetry: boolean) => {
+            let idx = 0;
+            const total = q.length;
+
+            const worker = async () => {
+                while (true) {
+                    if (!this.running) return;
+                    const i = idx++;
+                    if (i >= total) return;
+                    const entry = q[i];
+
+                    const result = await processOne(entry);
+
+                    if (result === 'ok') {
+                        filled++;
+                        adaptConcurrency(false);
+                    } else if (result === 'retry') {
+                        rateLimited++;
+                        adaptConcurrency(true);
+                        if (!isRetry) {
+                            retryQueue.push(entry);
+                        } else {
+                            failed++;
+                            entry[1].status = 'DEGRADED_DATA';
+                        }
+                    } else if (result === 'failed') {
+                        failed++;
+                        entry[1].status = 'DEGRADED_DATA';
+                        adaptConcurrency(false);
+                    } else {
+                        adaptConcurrency(false);
+                    }
+
+                    const processed = filled + failed + rateLimited;
+                    if (processed % 50 === 0 || processed === entries.length) {
+                        const { usage, max } = this.api.getRateLimitUsage();
+                        const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+                        this.logger.info(
+                            `Backfill progress: ${processed}/${entries.length} (${filled} ok, ${failed} failed, ${rateLimited} rate-limited) [${elapsed}s, concurrency=${currentConcurrency}, API: ${usage}/${max}]`
+                        );
+                    }
+                }
+            };
+
+            const workers: Promise<void>[] = [];
+            for (let w = 0; w < currentConcurrency; w++) {
+                workers.push(worker());
+            }
+            await Promise.all(workers);
+        };
+
+        await runPool(queue, false);
+        for (let attempt = 0; attempt < retryBudget && retryQueue.length > 0; attempt++) {
+            if (!this.running) break;
+            const batch = retryQueue.splice(0);
+            this.logger.info(`Backfill retry pass ${attempt + 1}/${retryBudget}: ${batch.length} pairs to retry`);
+            await sleep(2000 + Math.random() * 1000);
+            await runPool(batch, attempt === retryBudget - 1);
+            retried += batch.length - retryQueue.length;
         }
 
-        return { filled, failed, rateLimited };
+        for (const [, state] of retryQueue) {
+            state.status = 'DEGRADED_DATA';
+            failed++;
+        }
+
+        return { filled, failed, rateLimited, retried };
     }
 
     private async hyperliquidBackfill(
@@ -569,12 +646,13 @@ export default class OIService extends Tracker {
         const filled = result.reduce((sum, r) => sum + r.filled, 0);
         const failed = result.reduce((sum, r) => sum + r.failed, 0);
         const rateLimited = result.reduce((sum, r) => sum + r.rateLimited, 0);
+        const retried = result.reduce((sum, r) => sum + ('retried' in r ? r.retried : 0), 0);
 
         this.backfillDone = true;
         const readyCount = [...this.pairStates.values()].filter((s) => s.status === 'READY').length;
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
         this.logger.info(
-            `Backfill complete in ${elapsed}s: ${filled} filled, ${readyCount} ready, ${failed} failed (${rateLimited} rate-limited)`
+            `Backfill complete in ${elapsed}s: ${filled} filled, ${readyCount} ready, ${failed} failed (${rateLimited} rate-limited, ${retried} retried)`
         );
         this.lastDataTimestamp = Date.now();
     }
@@ -741,30 +819,43 @@ export default class OIService extends Tracker {
         );
 
         let anomaliesDetected = 0;
+        let idx = 0;
+        const concurrency = config.oi.coinglassScanConcurrency;
 
-        for (const [pairKey, state] of readyPairs) {
-            if (!this.running) break;
-            try {
-                const anomaly = await this.evaluatePair(state);
-                if (anomaly) {
-                    anomaliesDetected++;
-                    await this.sendAlert(anomaly);
+        const worker = async () => {
+            while (true) {
+                if (!this.running) return;
+                const i = idx++;
+                if (i >= readyPairs.length) return;
+                const [pairKey, state] = readyPairs[i];
+
+                try {
+                    const anomaly = await this.evaluatePair(state);
+                    if (anomaly) {
+                        anomaliesDetected++;
+                        await this.sendAlert(anomaly);
+                    }
+                } catch (error) {
+                    this.logger.error(`Error evaluating ${pairKey}: ${error}`);
                 }
-            } catch (error) {
-                this.logger.error(`Error evaluating ${pairKey}: ${error}`);
             }
-            await sleep(150);
+        };
+
+        const workers: Promise<void>[] = [];
+        for (let w = 0; w < concurrency; w++) {
+            workers.push(worker());
         }
+        await Promise.all(workers);
 
         this.lastScanTimestamp = Date.now();
         const cycleDuration = Date.now() - cycleStart;
-        const allHlStates = [...this.pairStates.values()].filter((s) => isCoinglassSource(s.source));
-        const ready = allHlStates.filter((s) => s.status === 'READY').length;
-        const warming = allHlStates.filter((s) => s.status === 'WARMUP').length;
-        const degraded = allHlStates.filter((s) => s.status === 'DEGRADED_DATA').length;
+        const allStates = [...this.pairStates.values()].filter((s) => isCoinglassSource(s.source));
+        const ready = allStates.filter((s) => s.status === 'READY').length;
+        const warming = allStates.filter((s) => s.status === 'WARMUP').length;
+        const degraded = allStates.filter((s) => s.status === 'DEGRADED_DATA').length;
 
         this.logger.info(
-            `Coinglass scan complete: ${readyPairs.length} pairs scanned, ${anomaliesDetected} anomalies [${cycleDuration}ms] | ` +
+            `Coinglass scan complete: ${readyPairs.length} pairs, ${anomaliesDetected} anomalies [${cycleDuration}ms, concurrency=${concurrency}] | ` +
                 `Status: ${ready} READY, ${warming} WARMUP, ${degraded} DEGRADED`
         );
     }

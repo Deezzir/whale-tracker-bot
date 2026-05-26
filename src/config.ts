@@ -182,8 +182,15 @@ export const config = {
         coinglassTokenBlacklist: process.env['COINGLASS_BLACKLIST']
             ? process.env['COINGLASS_BLACKLIST'].split(',').map((t) => t.trim().toUpperCase())
             : [],
-        coinglassBackfillConcurrency: parseInt(optionalEnv('COINGLASS_BACKFILL_CONCURRENCY', '4'), 10),
+        coinglassBackfillConcurrency: parseInt(
+            optionalEnv('COINGLASS_BACKFILL_CONCURRENCY', optionalEnv('COINGLASS_WARMUP_CONCURRENCY', '5')),
+            10
+        ),
         refreshIntervalMs: parseInt(optionalEnv('COINGLASS_REFRESH_INTERVAL_MS', '3600000'), 10),
+        coinglassBackfillMaxConcurrency: 8,
+        coinglassBackfillMinConcurrency: 2,
+        coinglassBackfillRetryBudget: 3,
+        coinglassScanConcurrency: 3,
         cooldownSeconds: 21600, // 6 hours
         ewmaLookback: 96, // 48 hours of 30m candles
         ewmaAlpha: 2 / (96 + 1), // ~0.02062

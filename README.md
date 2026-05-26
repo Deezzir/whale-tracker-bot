@@ -95,7 +95,7 @@ Create a `.env` file in the project root.
 | `COINGLASS_EXCHANGES` | `Gate,Bybit,Binance,OKX,Kraken` | Comma-separated CoinGlass exchanges to monitor. Do not include `Hyperliquid` or `Aster`; they are managed by direct sources. |
 | `COINGLASS_REFRESH_INTERVAL_MS` | `3600000` | Token universe refresh interval (1h) |
 | `COINGLASS_BLACKLIST` | `` | Comma-separated tokens to exclude from OI detection |
-| `COINGLASS_WARMUP_CONCURRENCY` | `4` | Parallel warmup batch size |
+| `COINGLASS_WARMUP_CONCURRENCY` | `5` | Parallel backfill concurrency |
 | `OI_HYPERLIQUID_DIRECT_ENABLED` | `true` | Enable direct Hyperliquid OI collection |
 | `OI_HYPERLIQUID_INTERVAL_MS` | `900000` | Hyperliquid OI collection interval (15 min) |
 
