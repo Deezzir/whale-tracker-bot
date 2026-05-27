@@ -1,3 +1,4 @@
+import { AxiosError } from 'axios';
 import { config } from '../../config';
 import Logger from '../../common/logger';
 import { createApiClient, ApiClient } from '../../common/api-client';
@@ -92,7 +93,7 @@ export default class CoinglassAPI {
                 low: parseFloat(c.low),
                 close: parseFloat(c.close)
             }))
-            .filter((c: OICandle) => isFinite(c.close) && c.close >= 0)
+            .filter((c: OICandle) => isFinite(c.close) && c.close > 0)
             .sort((a: OICandle, b: OICandle) => a.time - b.time);
     }
 
@@ -132,6 +133,14 @@ export default class CoinglassAPI {
                     `Rate limited! Usage: ${this.client.getRateLimitUsage().usage}/${this.client.getRateLimitUsage().max}. Waiting 5s...`
                 );
                 await sleep(5000);
+                const err = new AxiosError(
+                    `CoinGlass API rate limited: code=${body.code} msg=${body.msg}`,
+                    '429',
+                    undefined,
+                    undefined,
+                    { status: 429 } as any
+                );
+                throw err;
             }
             throw new Error(`CoinGlass API error: code=${body.code} msg=${body.msg}`);
         }

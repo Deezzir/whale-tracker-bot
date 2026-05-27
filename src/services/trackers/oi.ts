@@ -112,6 +112,16 @@ function detectCoinglassGap(state: PairStatisticalState, now: Date): boolean {
     return elapsed > threshold;
 }
 
+function enterDegraded(state: PairStatisticalState): void {
+    state.status = 'DEGRADED_DATA';
+    state.candleCount = 0;
+    state.cusumScore = 0;
+    state.recentZScores = [];
+    state.recentDeltaOI = [];
+    state.lastOI = null;
+    state.lastObservationAt = null;
+}
+
 interface OIAnomalyEvent {
     exchange: string;
     instrumentId: string;
@@ -266,7 +276,6 @@ export default class OIService extends Tracker {
     private api = new APIService();
     private hlApi = new HyperliquidAPI();
     private pairStates = new Map<string, PairStatisticalState>();
-    private backfillDone = false;
     private defaultInterval: Interval = '30m';
 
     async start(): Promise<void> {
@@ -394,6 +403,7 @@ export default class OIService extends Tracker {
                 this.logger.info(
                     `${exchange}: ${pairs.length} pairs loaded${blacklist.length > 0 ? ` (filtered from ${allPairsCount})` : ''}`
                 );
+                await sleep(1500);
             } catch (error) {
                 this.logger.error(`Failed to refresh ${exchange}: ${error}`);
             }
@@ -546,6 +556,14 @@ export default class OIService extends Tracker {
                 );
                 if (candles.length > 0) {
                     this.replayHistory(state, candles);
+                    const observations = candles
+                        .filter((c) => c.close > 0)
+                        .map((c) => this.buildCoinglassObservation(state, c, normalizeCoinglassIntervalStart(c.time)));
+                    if (observations.length > 0) {
+                        await DBService.upsertOIObservations(observations).catch((err) =>
+                            this.logger.error(`Failed to persist backfill for ${state.exchange}:${state.instrumentId}: ${err}`)
+                        );
+                    }
                     return 'ok';
                 }
                 return 'empty';
@@ -689,7 +707,6 @@ export default class OIService extends Tracker {
     }
 
     private async backfill(): Promise<void> {
-        if (this.backfillDone) return;
         this.logger.info(`Starting backfill for ${this.pairStates.size} pairs...`);
 
         const entries = [...this.pairStates.entries()];
@@ -707,7 +724,6 @@ export default class OIService extends Tracker {
         const retried = result.reduce((sum, r) => sum + ('retried' in r ? r.retried : 0), 0);
         const localSeeded = result.reduce((sum, r) => sum + ('localSeeded' in r ? r.localSeeded : 0), 0);
 
-        this.backfillDone = true;
         const readyCount = [...this.pairStates.values()].filter((s) => s.status === 'READY').length;
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
         this.logger.info(
@@ -717,7 +733,11 @@ export default class OIService extends Tracker {
     }
 
     private replayHistory(state: PairStatisticalState, candles: OICandle[]): void {
-        for (const candle of candles) updatePairState(state, candle.close);
+        for (const candle of candles) {
+            if (!(candle.close > 0)) continue;
+            updatePairState(state, candle.close);
+            state.lastObservationAt = normalizeCoinglassIntervalStart(candle.time);
+        }
         state.cusumScore = 0;
         state.recentZScores = [];
     }
@@ -911,11 +931,7 @@ export default class OIService extends Tracker {
         let gapDetected = 0;
         for (const [pairKey, state] of allCoinglassPairs) {
             if (state.status === 'READY' && detectCoinglassGap(state, now)) {
-                state.status = 'DEGRADED_DATA';
-                state.candleCount = 0;
-                state.cusumScore = 0;
-                state.recentZScores = [];
-                state.recentDeltaOI = [];
+                enterDegraded(state);
                 gapDetected++;
                 this.logger.warn(`Gap detected for ${pairKey}: transitioning to DEGRADED_DATA for re-warmup`);
             }
@@ -976,7 +992,7 @@ export default class OIService extends Tracker {
         const candles = await this.api.fetchOIHistory(state.exchange, state.instrumentId, this.defaultInterval, 1);
 
         if (candles.length === 0) {
-            if (state.status === 'READY') state.status = 'DEGRADED_DATA';
+            if (state.status === 'READY') enterDegraded(state);
             return null;
         }
 
@@ -986,7 +1002,14 @@ export default class OIService extends Tracker {
         }
 
         const latestCandle = candles[candles.length - 1];
+        if (!(latestCandle.close > 0)) {
+            return null;
+        }
         const intervalStart = normalizeCoinglassIntervalStart(latestCandle.time);
+
+        if (state.lastObservationAt && state.lastObservationAt.getTime() === intervalStart.getTime()) {
+            return null;
+        }
 
         const observation = this.buildCoinglassObservation(state, latestCandle, intervalStart);
         try {
@@ -996,10 +1019,6 @@ export default class OIService extends Tracker {
         }
 
         this.lastDataTimestamp = Date.now();
-
-        if (state.lastObservationAt && state.lastObservationAt.getTime() === intervalStart.getTime()) {
-            return null;
-        }
 
         updatePairState(state, latestCandle.close);
         state.lastObservationAt = intervalStart;
@@ -1039,6 +1058,8 @@ export default class OIService extends Tracker {
             this.logger.debug(`Cooldown active for ${event.exchange}:${event.instrumentId}, suppressing alert`);
             return;
         }
+
+        this.logger.info(`OI anomaly detected for ${event.exchange}:${event.instrumentId} (severity: ${event.severity}, trigger: ${event.triggerType}, OI change: ${event.deltaOIPercent.toFixed(1)}%), sending alert`);
 
         const result = this.formatAlertMessage(event);
         if (!result) return;
