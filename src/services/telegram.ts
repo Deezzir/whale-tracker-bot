@@ -153,7 +153,8 @@ export default class TelegramService {
                     `📈 Slow Accumulation: Σz > <b>${config.oi.cumulativeZThreshold}</b> (${config.oi.cumulativeZWindow} candles)`,
                     `🔥 Sustained Build: CUSUM > <b>${config.oi.cusumThreshold}</b>`,
                     `⏱ Cooldown: <b>${config.oi.cooldownSeconds / 3600}h</b>`,
-                    `🕐 Scan interval: <b>${config.oi.intervalMs / 60000}m</b>`
+                    `🕐 Coinglass Scan interval: <b>${config.oi.coinglassIntervalMs / 60000}m</b>`,
+                    `🕐 Hyperliquid Scan interval: <b>${config.oi.hyperliquidIntervalMs / 60000}m</b>`
                 ].join('\n')
             }
         ];

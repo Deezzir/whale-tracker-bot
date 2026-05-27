@@ -41,7 +41,6 @@ export interface IOIAlertRecord extends Document {
     deltaOIPercent: number;
     severity: Severity;
     priceChangePercent: number | null;
-    isStealthPositioning: boolean;
     detectedAt: Date;
     sentAt: Date;
     chatId: number;
@@ -61,7 +60,6 @@ const OIAlertRecordSchema = new Schema<IOIAlertRecord>(
         deltaOIPercent: { type: Number, required: true },
         severity: { type: String, required: true, enum: ['HIGH', 'CRITICAL'] },
         priceChangePercent: { type: Number, default: null },
-        isStealthPositioning: { type: Boolean, required: true, default: false },
         detectedAt: { type: Date, required: true },
         sentAt: { type: Date, required: true },
         chatId: { type: Number, required: true },

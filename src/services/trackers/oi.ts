@@ -7,10 +7,12 @@ import { sleep } from '../../common/utils';
 import { InlineKeyboardMarkup } from 'telegraf/types';
 import HyperliquidAPI, { PerpsMeta } from '../api/hyperliquid';
 
-export type PairStatus = 'WARMUP' | 'READY' | 'DEGRADED_DATA';
-export type OISource = 'COINGLASS' | 'HYPERLIQUID';
+const COINGLASS_CANDLE_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 
-export interface PairStatisticalState {
+type PairStatus = 'WARMUP' | 'READY' | 'DEGRADED_DATA';
+type OISource = 'COINGLASS' | 'HYPERLIQUID';
+
+interface PairStatisticalState {
     exchange: string;
     instrumentId: string;
     baseAsset: string;
@@ -26,7 +28,7 @@ export interface PairStatisticalState {
     source: OISource;
 }
 
-export interface HyperliquidOISnapshot {
+interface HyperliquidOISnapshot {
     exchange: 'Hyperliquid';
     source: 'HYPERLIQUID';
     instrumentId: string;
@@ -80,30 +82,37 @@ export function normalizeHLPerpContexts(meta: PerpsMeta): HyperliquidOISnapshot[
     return snapshots;
 }
 
-export function normalizeIntervalStart(timestamp: number, intervalMs: number): Date {
+function normalizeIntervalStart(timestamp: number, intervalMs: number): Date {
     return new Date(Math.floor(timestamp / intervalMs) * intervalMs);
 }
 
-export function isHyperliquidSource(source: OISource): boolean {
+function isHyperliquidSource(source: OISource): boolean {
     return source === 'HYPERLIQUID';
 }
 
-export function isCoinglassSource(source: OISource): boolean {
+function isCoinglassSource(source: OISource): boolean {
     return source === 'COINGLASS';
 }
 
-export function normalizeCoinglassIntervalStart(timestamp: number): Date {
-    return normalizeIntervalStart(timestamp, config.oi.coinglassIntervalMs);
+function normalizeCoinglassCandleTimestampMs(timestamp: number): number {
+    return timestamp < 1_000_000_000_000 ? timestamp * 1000 : timestamp;
 }
 
-export function detectCoinglassGap(state: PairStatisticalState, now: Date): boolean {
+function normalizeCoinglassIntervalStart(candleTimestamp: number): Date {
+    return normalizeIntervalStart(
+        normalizeCoinglassCandleTimestampMs(candleTimestamp),
+        COINGLASS_CANDLE_INTERVAL_MS
+    );
+}
+
+function detectCoinglassGap(state: PairStatisticalState, now: Date): boolean {
     if (!state.lastObservationAt) return false;
     const elapsed = now.getTime() - state.lastObservationAt.getTime();
-    const threshold = config.oi.coinglassGapThresholdIntervals * config.oi.coinglassIntervalMs;
+    const threshold = config.oi.coinglassGapThresholdIntervals * COINGLASS_CANDLE_INTERVAL_MS;
     return elapsed > threshold;
 }
 
-export interface OIAnomalyEvent {
+interface OIAnomalyEvent {
     exchange: string;
     instrumentId: string;
     baseAsset: string;
@@ -116,12 +125,11 @@ export interface OIAnomalyEvent {
     severity: Severity;
     priceContext: {
         priceChangePercent: number | null;
-        isStealthPositioning: boolean;
     };
     detectedAt: Date;
 }
 
-export function computeMAD(values: number[]): { median: number; mad: number } {
+function computeMAD(values: number[]): { median: number; mad: number } {
     if (values.length === 0) return { median: 0, mad: 0 };
     const sorted = [...values].sort((a, b) => a - b);
     const mid = Math.floor(sorted.length / 2);
@@ -133,13 +141,13 @@ export function computeMAD(values: number[]): { median: number; mad: number } {
     return { median, mad };
 }
 
-export function computeRobustZScore(value: number, median: number, mad: number): number {
+function computeRobustZScore(value: number, median: number, mad: number): number {
     const scaledMAD = 1.4826 * mad;
     if (scaledMAD === 0) return 0;
     return (value - median) / scaledMAD;
 }
 
-export function updatePairState(state: PairStatisticalState, newOIClose: number): void {
+function updatePairState(state: PairStatisticalState, newOIClose: number): void {
     if (state.lastOI === null) {
         state.lastOI = newOIClose;
         state.candleCount++;
@@ -181,7 +189,7 @@ export function updatePairState(state: PairStatisticalState, newOIClose: number)
     }
 }
 
-export function detectAnomaly(state: PairStatisticalState): Omit<OIAnomalyEvent, 'priceContext' | 'detectedAt'> | null {
+function detectAnomaly(state: PairStatisticalState): Omit<OIAnomalyEvent, 'priceContext' | 'detectedAt'> | null {
     if (state.status !== 'READY') return null;
     if (state.recentZScores.length === 0) return null;
     if ((state.lastOI || 0) < config.oi.minOIThreshold) return null;
@@ -254,20 +262,6 @@ export function detectAnomaly(state: PairStatisticalState): Omit<OIAnomalyEvent,
     return null;
 }
 
-export function computePriceContext(priceCandles: PriceCandle[]): {
-    priceChangePercent: number | null;
-    isStealthPositioning: boolean;
-} {
-    if (priceCandles.length < 2) {
-        return { priceChangePercent: null, isStealthPositioning: false };
-    }
-    const oldest = priceCandles[0].close;
-    const latest = priceCandles[priceCandles.length - 1].close;
-    const priceChangePercent = oldest > 0 ? ((latest - oldest) / oldest) * 100 : 0;
-    const isStealthPositioning = Math.abs(priceChangePercent) <= config.oi.stealthPriceThreshold;
-    return { priceChangePercent, isStealthPositioning };
-}
-
 export default class OIService extends Tracker {
     private api = new APIService();
     private hlApi = new HyperliquidAPI();
@@ -314,7 +308,7 @@ export default class OIService extends Tracker {
                     this.logger.error(`Failed to run a scan loop: ${error}`);
                 }
                 if (!this.running) break;
-                await this.cancellableSleep(config.oi.intervalMs);
+                await this.cancellableSleep(config.oi.coinglassIntervalMs);
             }
         };
 
@@ -768,21 +762,25 @@ export default class OIService extends Tracker {
         };
     }
 
-    private async computeHLPriceContext(instrumentId: string): Promise<{
-        priceChangePercent: number | null;
-        isStealthPositioning: boolean;
-    }> {
+    computeCoinglassPriceContext(priceCandles: PriceCandle[]): { priceChangePercent: number | null } {
+        if (priceCandles.length < 2) return { priceChangePercent: null };
+        const oldest = priceCandles[0].close;
+        const latest = priceCandles[priceCandles.length - 1].close;
+        const priceChangePercent = oldest > 0 ? ((latest - oldest) / oldest) * 100 : 0;
+        return { priceChangePercent };
+    }
+
+    private async computeHLPriceContext(instrumentId: string): Promise<{ priceChangePercent: number | null }> {
         try {
             const recent = await DBService.getRecentOIObservations('Hyperliquid', instrumentId, 4);
             const prices = recent.filter((o) => o.markPrice != null && o.markPrice > 0).map((o) => o.markPrice!);
-            if (prices.length < 2) return { priceChangePercent: null, isStealthPositioning: false };
+            if (prices.length < 2) return { priceChangePercent: null };
             const oldest = prices[0];
             const latest = prices[prices.length - 1];
             const priceChangePercent = oldest > 0 ? ((latest - oldest) / oldest) * 100 : 0;
-            const isStealthPositioning = Math.abs(priceChangePercent) <= config.oi.stealthPriceThreshold;
-            return { priceChangePercent, isStealthPositioning };
+            return { priceChangePercent };
         } catch {
-            return { priceChangePercent: null, isStealthPositioning: false };
+            return { priceChangePercent: null };
         }
     }
 
@@ -944,7 +942,7 @@ export default class OIService extends Tracker {
                 const [pairKey, state] = readyPairs[i];
 
                 try {
-                    const anomaly = await this.evaluatePair(state);
+                    const anomaly = await this.evaluateCoinglassPair(state);
                     if (anomaly) {
                         anomaliesDetected++;
                         await this.sendAlert(anomaly);
@@ -974,7 +972,7 @@ export default class OIService extends Tracker {
         );
     }
 
-    private async evaluatePair(state: PairStatisticalState): Promise<OIAnomalyEvent | null> {
+    private async evaluateCoinglassPair(state: PairStatisticalState): Promise<OIAnomalyEvent | null> {
         const candles = await this.api.fetchOIHistory(state.exchange, state.instrumentId, this.defaultInterval, 1);
 
         if (candles.length === 0) {
@@ -988,7 +986,7 @@ export default class OIService extends Tracker {
         }
 
         const latestCandle = candles[candles.length - 1];
-        const intervalStart = normalizeCoinglassIntervalStart(Date.now());
+        const intervalStart = normalizeCoinglassIntervalStart(latestCandle.time);
 
         const observation = this.buildCoinglassObservation(state, latestCandle, intervalStart);
         try {
@@ -997,17 +995,20 @@ export default class OIService extends Tracker {
             this.logger.error(`Failed to persist observation for ${state.exchange}:${state.instrumentId}: ${error}`);
         }
 
+        this.lastDataTimestamp = Date.now();
+
+        if (state.lastObservationAt && state.lastObservationAt.getTime() === intervalStart.getTime()) {
+            return null;
+        }
+
         updatePairState(state, latestCandle.close);
         state.lastObservationAt = intervalStart;
 
         const detection = detectAnomaly(state);
         if (!detection) return null;
 
-        let priceContext: { priceChangePercent: number | null; isStealthPositioning: boolean } = {
-            priceChangePercent: null,
-            isStealthPositioning: false
-        };
 
+        let priceContext: { priceChangePercent: number | null } = { priceChangePercent: null };
         try {
             const priceCandles = await this.api.fetchPriceHistory(
                 state.exchange,
@@ -1015,13 +1016,12 @@ export default class OIService extends Tracker {
                 this.defaultInterval,
                 4
             );
-            priceContext = computePriceContext(priceCandles);
+            priceContext = this.computeCoinglassPriceContext(priceCandles);
         } catch (error) {
             this.logger.warn(`Price context fetch failed for ${state.exchange}:${state.instrumentId}`);
         }
 
         state.cusumScore = 0;
-        this.lastDataTimestamp = Date.now();
 
         return {
             ...detection,
