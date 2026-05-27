@@ -17,6 +17,7 @@ Monitors Hyperliquid perp and spot trade activity, aggregates by wallet/coin/dir
 - Handles message payloads in `handleTrade(...)`.
 
 Normalization details:
+
 - Perps:
   - Buy taker -> `long`
   - Sell taker -> `short`
@@ -49,33 +50,39 @@ Candidates are classified into one of four alert branches:
    - Other coins: >= $300K (`HS_TWAP_OTHER_MIN_USD`)
 
 Re-alert only when growth exceeds dynamic threshold:
+
 - max(percent growth threshold, fixed USD threshold)
 
 `mainCoins` list: BTC, ETH, BNB, XRP, ZEC, DOGE, SOL, HYPE.
 
 Alert destinations:
+
 - Each branch routes to its own dedicated channel (Fresh Wallet, Whale Activity, Big Whale, TWAP).
 - Manual track updates route to dedicated tracking channel.
 
 ## Manual Tracking
 
 Command wiring in `src/index.ts`:
+
 - `/track <wallet> <coin> <long|short>`
 - `/untrack <wallet> <coin> <long|short>`
 - `/tracked`
 - `/stats <coin>`
 
 Callback workflows:
+
 - `track:<id>` and `untrack:<id>` inline actions are handled via Telegram callback actions.
 
 ## Persistence
 
 `src/services/db/hyperliquid.ts` manages:
+
 - Aggregations collection.
 - Sent alerts collection.
 - Tracked wallet collection.
 
 Common operations:
+
 - Bulk upsert on flush.
 - Candidate reads for scan loop.
 - Alert history reads for re-alert logic.

@@ -31,7 +31,7 @@ function parseCoinglassExchanges(value: string): string[] {
     if (invalidExchanges.length > 0) {
         throw new Error(
             `COINGLASS_EXCHANGES cannot include externally managed exchanges: ${invalidExchanges.join(', ')}. ` +
-                'Remove them from COINGLASS_EXCHANGES.'
+            'Remove them from COINGLASS_EXCHANGES.'
         );
     }
 
@@ -187,12 +187,14 @@ export const config = {
             10
         ),
         refreshIntervalMs: parseInt(optionalEnv('COINGLASS_REFRESH_INTERVAL_MS', '3600000'), 10),
+        hyperliquidIntervalMs: parseInt(optionalEnv('OI_HYPERLIQUID_INTERVAL_MS', '900000'), 10),
+        coinglassGapThresholdIntervals: parseInt(optionalEnv('COINGLASS_GAP_THRESHOLD_INTERVALS', '3'), 10),
         coinglassBackfillMaxConcurrency: 8,
         coinglassBackfillMinConcurrency: 2,
         coinglassBackfillRetryBudget: 3,
         coinglassScanConcurrency: 3,
         cooldownSeconds: 21600, // 6 hours
-        ewmaLookback: 96, // 48 hours of 30m candles
+        warmupCandles: 96, // 48 hours of 30m candles
         ewmaAlpha: 2 / (96 + 1), // ~0.02062
         zScoreThreshold: 4, // fast spike → HIGH
         cumulativeZThreshold: 8, // slow accumulation over 4 candles → HIGH
@@ -203,12 +205,11 @@ export const config = {
         minDeltaOIPercent: 1.5, // minimum OI delta (%) required for any trigger
         cusumDrift: 1, // CUSUM drift parameter k
         stealthPriceThreshold: 2, // <=2% price move = stealth positioning
-        warmupCandles: 96, // minimum candles before alerting
-        intervalMs: 5 * 60 * 1000, // 30 minutes
+
+        intervalMs: 5 * 60 * 1000, // 5 minutes
         noDataTimeoutMs: 120 * 60 * 1000, // 2 hour
         scanStallTimeoutMs: 120 * 60 * 1000, // 2 hour
         cleanupTTLms: 5 * 24 * 60 * 60 * 1000, // 5 days
-        hyperliquidDirectEnabled: optionalEnv('OI_HYPERLIQUID_DIRECT_ENABLED', 'true') === 'true',
-        hyperliquidIntervalMs: parseInt(optionalEnv('OI_HYPERLIQUID_INTERVAL_MS', '900000'), 10) // 15 minutes
+        coinglassIntervalMs: 30 * 60 * 1000 // 30 minutes (Coinglass candle interval)
     }
 } as const;

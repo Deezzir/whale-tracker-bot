@@ -3,7 +3,6 @@ import { config } from '../../config';
 import APIService, { Interval, OICandle, PriceCandle } from '../api/coinglass';
 import DBService, { TriggerType, Severity } from '../db/oi';
 import { getRedisClient } from '../redis';
-import Tg from '../telegram';
 import { sleep } from '../../common/utils';
 import { InlineKeyboardMarkup } from 'telegraf/types';
 import HyperliquidAPI, { PerpsMeta } from '../api/hyperliquid';
@@ -93,6 +92,17 @@ export function isCoinglassSource(source: OISource): boolean {
     return source === 'COINGLASS';
 }
 
+export function normalizeCoinglassIntervalStart(timestamp: number): Date {
+    return normalizeIntervalStart(timestamp, config.oi.coinglassIntervalMs);
+}
+
+export function detectCoinglassGap(state: PairStatisticalState, now: Date): boolean {
+    if (!state.lastObservationAt) return false;
+    const elapsed = now.getTime() - state.lastObservationAt.getTime();
+    const threshold = config.oi.coinglassGapThresholdIntervals * config.oi.coinglassIntervalMs;
+    return elapsed > threshold;
+}
+
 export interface OIAnomalyEvent {
     exchange: string;
     instrumentId: string;
@@ -148,7 +158,7 @@ export function updatePairState(state: PairStatisticalState, newOIClose: number)
 
     // Update recentDeltaOI ring buffer (keep last 192)
     state.recentDeltaOI.push(deltaOI);
-    if (state.recentDeltaOI.length > config.oi.ewmaLookback) {
+    if (state.recentDeltaOI.length > config.oi.warmupCandles) {
         state.recentDeltaOI.shift();
     }
 
@@ -265,21 +275,11 @@ export default class OIService extends Tracker {
     private backfillDone = false;
     private defaultInterval: Interval = '30m';
 
-    constructor(tg: Tg, channels: { chatId: number }[]) {
-        super(tg, channels);
-        if (config.oi.coinglassExchanges.length === 0 && !config.oi.hyperliquidDirectEnabled)
-            throw new Error(`No exchanges provided for the CoinGlass tracker and Hyperliquid direct is disabled`);
-    }
-
     async start(): Promise<void> {
         if (this.running) return;
         this.running = true;
         this.logger.info('Monitoring started');
         this.logger.info(`Exchanges: [${config.oi.coinglassExchanges.join(', ')}]`);
-        if (config.oi.hyperliquidDirectEnabled) {
-            this.logger.info(`Hyperliquid direct: enabled (interval: ${config.oi.hyperliquidIntervalMs}ms)`);
-        }
-
         await this.refreshUniverse();
         await this.backfill();
         this.monitorTask = this.mainLoop();
@@ -319,7 +319,6 @@ export default class OIService extends Tracker {
         };
 
         const hlScanLoop = async () => {
-            if (!config.oi.hyperliquidDirectEnabled) return;
             while (this.running) {
                 try {
                     await this.hlScanAllPairs();
@@ -337,7 +336,9 @@ export default class OIService extends Tracker {
                     const deletedObs = await DBService.cleanOldObservations(config.oi.cleanupTTLms);
                     const deletedAlerts = await DBService.cleanOldAlerts(config.oi.cleanupTTLms);
                     if (deletedObs > 0 || deletedAlerts > 0) {
-                        this.logger.info(`Cleanup: deleted ${deletedObs} old observations, ${deletedAlerts} old alerts`);
+                        this.logger.info(
+                            `Cleanup: deleted ${deletedObs} old observations, ${deletedAlerts} old alerts`
+                        );
                     }
                 } catch (error) {
                     this.logger.error(`Failed to cleanup: ${error}`);
@@ -350,7 +351,14 @@ export default class OIService extends Tracker {
         const alertNoDataLoop = this.watchDog(config.oi.noDataTimeoutMs);
         const scanWatchDog = this.scanWatchDog(config.oi.scanStallTimeoutMs);
 
-        await Promise.all([coinglassScanLoop(), hlScanLoop(), cleanupLoop(), refreshUniverseLoop(), alertNoDataLoop, scanWatchDog]);
+        await Promise.all([
+            coinglassScanLoop(),
+            hlScanLoop(),
+            cleanupLoop(),
+            refreshUniverseLoop(),
+            alertNoDataLoop,
+            scanWatchDog
+        ]);
     }
 
     private async refreshCoinglassUniverse(): Promise<number> {
@@ -401,8 +409,6 @@ export default class OIService extends Tracker {
     }
 
     private async refreshHyperliquidUniverse(): Promise<number> {
-        if (!config.oi.hyperliquidDirectEnabled) return 0;
-
         const blacklist = config.oi.coinglassTokenBlacklist;
         let totalPairs = 0;
 
@@ -473,7 +479,7 @@ export default class OIService extends Tracker {
     private async coinglassBackfill(
         entries: [string, PairStatisticalState][],
         startTime: number
-    ): Promise<{ filled: number; failed: number; rateLimited: number; retried: number }> {
+    ): Promise<{ filled: number; failed: number; rateLimited: number; retried: number; localSeeded: number }> {
         const minConcurrency = config.oi.coinglassBackfillMinConcurrency;
         const maxConcurrency = config.oi.coinglassBackfillMaxConcurrency;
         const retryBudget = config.oi.coinglassBackfillRetryBudget;
@@ -482,9 +488,51 @@ export default class OIService extends Tracker {
         let failed = 0;
         let rateLimited = 0;
         let retried = 0;
+        let localSeeded = 0;
         let currentConcurrency = config.oi.coinglassBackfillConcurrency;
 
-        const queue = [...entries];
+        const needsExternal: [string, PairStatisticalState][] = [];
+        for (const [key, state] of entries) {
+            try {
+                const observations = await DBService.getRecentOIObservations(
+                    state.exchange,
+                    state.instrumentId,
+                    config.oi.warmupCandles
+                );
+                if (observations.length >= config.oi.warmupCandles) {
+                    this.replayDBHistory(
+                        state,
+                        observations.map((o) => ({ openInterest: o.openInterest, intervalStart: o.intervalStart }))
+                    );
+                    localSeeded++;
+                    filled++;
+                } else if (observations.length > 0) {
+                    this.replayDBHistory(
+                        state,
+                        observations.map((o) => ({ openInterest: o.openInterest, intervalStart: o.intervalStart }))
+                    );
+                    needsExternal.push([key, state]);
+                } else {
+                    needsExternal.push([key, state]);
+                }
+            } catch (error) {
+                this.logger.error(`Local warmup failed for ${key}: ${error}`);
+                needsExternal.push([key, state]);
+            }
+        }
+
+        if (localSeeded > 0 || needsExternal.length > 0) {
+            const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+            this.logger.info(
+                `Coinglass local warmup: ${localSeeded} pairs seeded from local history, ${needsExternal.length} need external fetch [${elapsed}s]`
+            );
+        }
+
+        if (needsExternal.length === 0) {
+            return { filled, failed, rateLimited, retried, localSeeded };
+        }
+
+        const queue = [...needsExternal];
         const retryQueue: [string, PairStatisticalState][] = [];
 
         let windowRequests = 0;
@@ -575,7 +623,7 @@ export default class OIService extends Tracker {
                         const { usage, max } = this.api.getRateLimitUsage();
                         const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
                         this.logger.info(
-                            `Backfill progress: ${processed}/${entries.length} (${filled} ok, ${failed} failed, ${rateLimited} rate-limited) [${elapsed}s, concurrency=${currentConcurrency}, API: ${usage}/${max}]`
+                            `Backfill progress: ${processed}/${entries.length} (${filled} ok, ${failed} failed, ${rateLimited} rate-limited, ${localSeeded} local) [${elapsed}s, concurrency=${currentConcurrency}, API: ${usage}/${max}]`
                         );
                     }
                 }
@@ -603,7 +651,7 @@ export default class OIService extends Tracker {
             failed++;
         }
 
-        return { filled, failed, rateLimited, retried };
+        return { filled, failed, rateLimited, retried, localSeeded };
     }
 
     private async hyperliquidBackfill(
@@ -663,12 +711,13 @@ export default class OIService extends Tracker {
         const failed = result.reduce((sum, r) => sum + r.failed, 0);
         const rateLimited = result.reduce((sum, r) => sum + r.rateLimited, 0);
         const retried = result.reduce((sum, r) => sum + ('retried' in r ? r.retried : 0), 0);
+        const localSeeded = result.reduce((sum, r) => sum + ('localSeeded' in r ? r.localSeeded : 0), 0);
 
         this.backfillDone = true;
         const readyCount = [...this.pairStates.values()].filter((s) => s.status === 'READY').length;
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
         this.logger.info(
-            `Backfill complete in ${elapsed}s: ${filled} filled, ${readyCount} ready, ${failed} failed (${rateLimited} rate-limited, ${retried} retried)`
+            `Backfill complete in ${elapsed}s: ${filled} filled (${localSeeded} local-seeded), ${readyCount} ready, ${failed} failed (${rateLimited} rate-limited, ${retried} retried)`
         );
         this.lastDataTimestamp = Date.now();
     }
@@ -689,6 +738,34 @@ export default class OIService extends Tracker {
         if (observations.length > 0) {
             state.lastObservationAt = observations[observations.length - 1].intervalStart;
         }
+    }
+
+    private buildCoinglassObservation(
+        state: PairStatisticalState,
+        candle: OICandle,
+        intervalStart: Date
+    ): {
+        exchange: string;
+        instrumentId: string;
+        baseAsset: string;
+        quoteAsset: string;
+        source: 'COINGLASS';
+        intervalStart: Date;
+        observedAt: Date;
+        openInterest: number;
+        valid: boolean;
+    } {
+        return {
+            exchange: state.exchange,
+            instrumentId: state.instrumentId,
+            baseAsset: state.baseAsset,
+            quoteAsset: 'USD',
+            source: 'COINGLASS',
+            intervalStart,
+            observedAt: new Date(),
+            openInterest: candle.close,
+            valid: candle.close > 0
+        };
     }
 
     private async computeHLPriceContext(instrumentId: string): Promise<{
@@ -822,7 +899,7 @@ export default class OIService extends Tracker {
 
         this.logger.info(
             `Hyperliquid scan complete: ${hlPairs.length} attempted, ${stored} stored, ${skipped} skipped, ${anomaliesDetected} anomalies [${cycleDuration}ms] | ` +
-                `Status: ${ready} READY, ${warming} WARMUP, ${degraded} DEGRADED`
+            `Status: ${ready} READY, ${warming} WARMUP, ${degraded} DEGRADED`
         );
     }
 
@@ -830,8 +907,29 @@ export default class OIService extends Tracker {
         if (!this.running) return;
 
         const cycleStart = Date.now();
+        const now = new Date();
+
+        const allCoinglassPairs = [...this.pairStates.entries()].filter(([, s]) => isCoinglassSource(s.source));
+        let gapDetected = 0;
+        for (const [pairKey, state] of allCoinglassPairs) {
+            if (state.status === 'READY' && detectCoinglassGap(state, now)) {
+                state.status = 'DEGRADED_DATA';
+                state.candleCount = 0;
+                state.cusumScore = 0;
+                state.recentZScores = [];
+                state.recentDeltaOI = [];
+                gapDetected++;
+                this.logger.warn(`Gap detected for ${pairKey}: transitioning to DEGRADED_DATA for re-warmup`);
+            }
+        }
+        if (gapDetected > 0) {
+            this.logger.info(`Gap detection: ${gapDetected} pairs transitioned to DEGRADED_DATA`);
+        }
+
         const readyPairs = [...this.pairStates.entries()].filter(
-            ([, s]) => (s.status === 'READY' || s.status === 'WARMUP') && isCoinglassSource(s.source)
+            ([, s]) =>
+                (s.status === 'READY' || s.status === 'WARMUP' || s.status === 'DEGRADED_DATA') &&
+                isCoinglassSource(s.source)
         );
 
         let anomaliesDetected = 0;
@@ -872,7 +970,7 @@ export default class OIService extends Tracker {
 
         this.logger.info(
             `Coinglass scan complete: ${readyPairs.length} pairs, ${anomaliesDetected} anomalies [${cycleDuration}ms, concurrency=${concurrency}] | ` +
-                `Status: ${ready} READY, ${warming} WARMUP, ${degraded} DEGRADED`
+            `Status: ${ready} READY, ${warming} WARMUP, ${degraded} DEGRADED`
         );
     }
 
@@ -886,10 +984,21 @@ export default class OIService extends Tracker {
 
         if (state.status === 'DEGRADED_DATA' && state.candleCount >= config.oi.warmupCandles) {
             state.status = 'READY';
+            this.logger.info(`Pair recovered: ${state.exchange}:${state.instrumentId} re-warmup complete, now READY`);
         }
 
         const latestCandle = candles[candles.length - 1];
+        const intervalStart = normalizeCoinglassIntervalStart(Date.now());
+
+        const observation = this.buildCoinglassObservation(state, latestCandle, intervalStart);
+        try {
+            await DBService.upsertOIObservations([observation]);
+        } catch (error) {
+            this.logger.error(`Failed to persist observation for ${state.exchange}:${state.instrumentId}: ${error}`);
+        }
+
         updatePairState(state, latestCandle.close);
+        state.lastObservationAt = intervalStart;
 
         const detection = detectAnomaly(state);
         if (!detection) return null;
@@ -961,7 +1070,6 @@ export default class OIService extends Tracker {
                         if (!frame) return;
                         await sleep(1000);
                         await frame.click('[data-name="open-indicators-dialog"]');
-                        console.log('Clicked indicators dialog');
                         await sleep(1000);
                         await frame.type('input[data-role="search"]', 'Funding Rate');
                         await frame.click('div[data-id="FundingRateSingleValue@tv-basicstudies"]');

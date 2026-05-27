@@ -140,4 +140,5 @@ at `specs/001-hyperliquid-tracker-branches/plan.md`
 at `specs/002-track-oi-anomalies/plan.md`
 at `specs/003-hyperliquid-oi-history/plan.md`
 at `specs/004-unified-retry-ratelimit/plan.md`
+at `specs/005-persist-coinglass-oi-history/plan.md`
 <!-- SPECKIT END -->

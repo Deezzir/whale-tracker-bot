@@ -39,6 +39,7 @@ Tracks Polymarket matched orders, aggregates position exposure per wallet+market
 - Re-alert sends only when growth exceeds dynamic threshold.
 
 Alert outputs include:
+
 - position size
 - outcome + market context
 - wallet/profile links
@@ -47,10 +48,12 @@ Alert outputs include:
 ## Persistence
 
 `src/services/db/polymarket.ts` stores:
+
 - aggregated position records
 - sent alerts history
 
 Behavior depends on:
+
 - bulk upsert aggregation logic
 - per-channel last-alert lookups for reply threading and dedup
 

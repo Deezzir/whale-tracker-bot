@@ -96,17 +96,18 @@ CoinGlass OI Anomaly Tracker:
 - `COINGLASS_EXCHANGES` (default: `Gate,Bybit,Binance,OKX,Kraken`; do not include `Hyperliquid` or `Aster`, which are managed by direct sources)
 - `COINGLASS_REFRESH_INTERVAL_MS` (default: `3600000` / 1h)
 - `COINGLASS_BLACKLIST` (default: empty — comma-separated tokens to exclude from detection)
-- `COINGLASS_WARMUP_CONCURRENCY` (default: `5` — parallel backfill concurrency)
-- `OI_HYPERLIQUID_DIRECT_ENABLED` (default: `true` — enable direct Hyperliquid OI collection)
+- `COINGLASS_BACKFILL_CONCURRENCY` (default: `5` — parallel backfill concurrency; `COINGLASS_WARMUP_CONCURRENCY` accepted as fallback)
+- `COINGLASS_GAP_THRESHOLD_INTERVALS` (default: `3` — missed intervals before pair enters DEGRADED_DATA)
 - `OI_HYPERLIQUID_INTERVAL_MS` (default: `900000` / 15min — Hyperliquid OI collection interval)
 
 ### CoinGlass Detection Parameters (hardcoded in config.ts)
 
 | Parameter | Value | Description |
 |-----------|-------|-------------|
-| Scan interval | 30 min | Evaluation frequency per pair |
-| EWMA lookback | 96 intervals (48h) | Window for mean/variance |
-| EWMA α | ~0.02062 | Decay factor |
+| Scan sleep | 5 min | Sleep between scan cycles (actual cycle time is longer) |
+| Candle interval | 30 min | Coinglass OI candle granularity |
+| Warmup candles | 96 (48h) | Ring buffer size and minimum candles before alerting |
+| EWMA α | ~0.02062 | Decay factor (2 / (warmupCandles + 1)) |
 | Fast spike (z) | > 4 | Single-interval robust z-score → HIGH |
 | Slow accumulation (Σz) | > 8 | Cumulative z over 4 candles → HIGH |
 | CUSUM threshold | > 12 | Sustained build → CRITICAL |
@@ -142,7 +143,7 @@ Each alert branch routes to its own dedicated Telegram channel (no topics):
   - `src/services/trackers/hyperliquid.ts`
   - `src/services/trackers/polymarket.ts`
   - `src/services/trackers/stake.ts`
-  - `src/services/trackers/coinglass.ts`
+  - `src/services/trackers/oi.ts`
 
 ## Operational Guidance
 

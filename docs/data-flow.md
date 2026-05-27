@@ -18,6 +18,7 @@ All trackers follow a similar high-level shape:
 8. Send Telegram alert and persist sent-alert metadata.
 
 Core shared behavior lives in:
+
 - `src/common/tracker.ts`
 - `src/common/mutex.ts`
 - `src/common/utils.ts`

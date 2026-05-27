@@ -15,6 +15,7 @@ This document gives a fast system map for working on Whale Tracker Bot.
   - Health endpoint via `src/healthz.ts`
 
 Boot order in `src/index.ts`:
+
 1. `connectDB()`
 2. `connectRedis()`
 3. `telegram.start(...)`
@@ -97,6 +98,7 @@ Health is not only process liveness.
 - `docs/data-flow.md`
 - `docs/components/hyperliquid.md`
 - `docs/components/polymarket.md`
+- `docs/components/oi.md`
 - `docs/components/stake.md`
 - `docs/configuration.md`
 - `docs/operations.md`

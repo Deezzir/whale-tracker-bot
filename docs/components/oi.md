@@ -7,16 +7,22 @@ Monitors open interest across configured exchanges using statistical anomaly det
 ## Architecture
 
 ```
-CoinglassService (tracker)
+OIService (tracker)
 ├── Token Universe Refresh (1h cycle)
-│   └── CoinglassAPI.fetchExchangePairs() → CoinglassDBService.upsertInstrumentUniverse()
-├── Cold-Start Warmup (parallel batches, configurable concurrency)
-│   └── fetchOIHistory(96 candles) → replayHistory() → EWMA calibration only
+│   └── CoinglassAPI.fetchExchangePairs() → OIDBService.upsertInstrumentUniverse()
+├── Startup Warmup (local-first)
+│   ├── Query local oiobservations per pair
+│   ├── If sufficient local history → replayDBHistory() → READY (no API calls)
+│   └── If insufficient → fetchOIHistory(96 candles) → replayHistory() → READY
 │       └── CUSUM + recentZScores reset after warmup (prevents false-positive burst)
-└── Scan Cycle (30min)
-    ├── evaluatePair() → fetchOIHistory(1) → updatePairState() → detectAnomaly()
-    ├── Price context: fetchPriceHistory(4) → computePriceContext()
-    └── sendAlert() → cooldown check → Telegram (with Coinalyze OI chart button) → persist OIAlertRecord
+├── Coinglass Scan Cycle (5min sleep between cycles)
+│   ├── Gap detection → DEGRADED_DATA transition if ≥3 intervals missed
+│   ├── evaluatePair() → fetchOIHistory(1) → persist observation → updatePairState() → detectAnomaly()
+│   ├── Price context: fetchPriceHistory(4) → computePriceContext()
+│   └── sendAlert() → cooldown check → Telegram (with Coinalyze OI chart button) → persist OIAlertRecord
+└── Hyperliquid Scan Cycle (15min)
+    ├── fetchPerpMeta() → normalizeHLPerpContexts() → persist observations
+    └── updatePairState() → detectAnomaly() → sendAlert()
 ```
 
 ## Detection Pipeline
@@ -48,11 +54,40 @@ Alerts include an inline button linking to the exchange-specific OI chart on Coi
 
 - **In-memory**: `Map<string, PairStatisticalState>` for hot-path detection
 - **Redis**: cooldown keys with 6h TTL (`oi:cooldown:{exchange}:{instrumentId}`)
-- **MongoDB**: ExchangeInstrumentUniverse (universe), OIAlertRecord (audit)
+- **MongoDB**: ExchangeInstrumentUniverse (universe), OIObservation (time-series history), OIAlertRecord (audit)
 
 ## Cold Start Behavior
 
-On restart, fetches 96 candles (48h at 30m intervals) per pair from CoinGlass API in parallel batches and replays through the detection engine to calibrate EWMA mean/variance. CUSUM and recentZScores are reset to zero after warmup to prevent false-positive floods. Only truly new listings (< 48h old) remain in WARMUP.
+On restart, the tracker attempts **local-first warmup** from persisted MongoDB observations before falling back to external CoinGlass API fetch:
+
+1. Query local `oiobservations` for each Coinglass pair (source=COINGLASS, limit=96)
+2. If ≥96 valid local candles exist → replay from local history (fast, no API calls)
+3. If partial local history → replay what exists, then fetch remaining from CoinGlass API
+4. If no local history → full external backfill (96 candles per pair, parallel batches)
+
+This eliminates repeated ~1800s startup warmups after the first run. Subsequent restarts typically complete warmup in seconds.
+
+## Local History Persistence
+
+During each scan cycle, every Coinglass pair persists its latest OI candle as an observation to MongoDB:
+
+- **Upsert key**: `(exchange, instrumentId, intervalStart)` — idempotent, no duplicates
+- **Retention**: 5-day rolling window (observations older than 5 days are cleaned up hourly)
+- **Source tag**: `COINGLASS` — distinguishes from Hyperliquid observations in the same collection
+
+## Gap Handling
+
+When a significant gap is detected (≥3 missed intervals by default, configurable via `COINGLASS_GAP_THRESHOLD_INTERVALS`):
+
+1. Affected pair transitions from `READY` → `DEGRADED_DATA`
+2. Statistical state is reset (CUSUM, z-scores, deltaOI buffers cleared)
+3. Anomaly alerts are suppressed for that pair
+4. Pair re-warms through normal scan cycles until `warmupCandles` threshold is met
+5. Once re-warmed, pair transitions back to `READY` and resumes alerting
+
+**Key design choice**: No targeted external mini-backfill for short outages. Recovery is purely local re-warmup driven. This keeps complexity low and avoids operational coupling to external API availability during recovery.
+
+Unaffected pairs continue normal detection and alerting throughout.
 
 ## API Requirements
 
@@ -90,6 +125,6 @@ OI observations are stored in the `oiobservations` MongoDB collection with index
 ## Files
 
 - `src/services/api/coinglass.ts` — HTTP client
-- `src/services/db/coinglass.ts` — Mongoose models & persistence
-- `src/services/trackers/coinglass.ts` — Tracker + detection engine
-- `src/config.ts` — `config.coinglass` block
+- `src/services/db/oi.ts` — Mongoose models & persistence (observations, alerts, instruments)
+- `src/services/trackers/oi.ts` — Tracker + detection engine (backfill, warmup, gap handling, scan loops)
+- `src/config.ts` — `config.coinglass` and `config.oi` blocks

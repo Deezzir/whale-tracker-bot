@@ -209,4 +209,12 @@ export default class OIDBService {
         const result = await OIAlertRecordModel.deleteMany({ sentAt: { $lt: cutoff } });
         return result.deletedCount;
     }
+
+    static async countOIObservations(
+        exchange: string,
+        instrumentId: string,
+        source: 'COINGLASS' | 'HYPERLIQUID'
+    ): Promise<number> {
+        return OIObservationModel.countDocuments({ exchange, instrumentId, source, valid: true });
+    }
 }
