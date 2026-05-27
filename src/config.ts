@@ -163,13 +163,13 @@ export const config = {
         apiKey: requireEnv('COINGLASS_API_KEY') as string,
         api: 'https://open-api-v4.coinglass.com',
         retry: {
-            maxAttempts: 3,
+            maxAttempts: 4,
             initialDelayMs: 1000,
             backoffMultiplier: 2,
             maxDelayMs: 30000
         },
         rateLimit: {
-            requestsPerSecond: 5,
+            requestsPerSecond: 1.2,
             headerUsageKey: 'api-key-use-limit',
             headerLimitKey: 'api-key-max-limit',
             throttleThreshold: 0.9
@@ -188,9 +188,7 @@ export const config = {
         ),
         refreshIntervalMs: parseInt(optionalEnv('COINGLASS_REFRESH_INTERVAL_MS', '3600000'), 10),
         coinglassGapThresholdIntervals: parseInt(optionalEnv('COINGLASS_GAP_THRESHOLD_INTERVALS', '3'), 10),
-        coinglassBackfillMaxConcurrency: 8,
-        coinglassBackfillMinConcurrency: 2,
-        coinglassBackfillRetryBudget: 3,
+        coinglassBackfillMaxConcurrency: 4,
         coinglassScanConcurrency: 3,
 
         cooldownSeconds: 21600, // 6 hours
@@ -209,6 +207,6 @@ export const config = {
         hyperliquidIntervalMs: 15 * 60 * 1000, // 15 minutes
         noDataTimeoutMs: 120 * 60 * 1000, // 2 hour
         scanStallTimeoutMs: 120 * 60 * 1000, // 2 hour
-        cleanupTTLms: 5 * 24 * 60 * 60 * 1000, // 5 days
+        cleanupTTLms: 5 * 24 * 60 * 60 * 1000 // 5 days
     }
 } as const;

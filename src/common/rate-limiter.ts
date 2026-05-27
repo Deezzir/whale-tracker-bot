@@ -29,7 +29,7 @@ export class RateLimiter {
         const waitMs = ((1 - this.tokens) / this.refillRate) * 1000;
 
         if (logger && moduleName && waitMs > 100) {
-            logger.warn(
+            logger.debug(
                 `[${moduleName}] Rate-limit delay: waiting ${Math.round(waitMs)}ms (tokens=${this.tokens.toFixed(2)})`
             );
         }

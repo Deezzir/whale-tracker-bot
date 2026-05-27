@@ -53,17 +53,17 @@ export default class Logger {
     }
 
     public info(message: string, data?: unknown) {
-        if (['INFO', 'WARN', 'ERROR', 'DEBUG'].indexOf(LOG_LEVEL) > -1) {
+        if (['DEBUG', 'INFO'].indexOf(LOG_LEVEL) > -1) {
             this.log('INFO', this.module, message, data);
         }
     }
     public warn(message: string, data?: unknown) {
-        if (['WARN', 'ERROR', 'DEBUG'].indexOf(LOG_LEVEL) > -1) {
+        if (['DEBUG', 'INFO', 'WARN'].indexOf(LOG_LEVEL) > -1) {
             this.log('WARN', this.module, message, data);
         }
     }
     public error(message: string, data?: unknown) {
-        if (['ERROR', 'DEBUG'].indexOf(LOG_LEVEL) > -1) {
+        if (['DEBUG', 'INFO', 'WARN', 'ERROR'].indexOf(LOG_LEVEL) > -1) {
             this.log('ERROR', this.module, message, data);
         }
     }

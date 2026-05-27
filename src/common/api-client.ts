@@ -28,7 +28,7 @@ export interface ApiClientConfig {
     timeout?: number;
 }
 
-export interface ApiRequestConfig extends AxiosRequestConfig {}
+export interface ApiRequestConfig extends AxiosRequestConfig { }
 
 const RETRYABLE_NETWORK_CODES = new Set([
     'ECONNRESET',
@@ -95,7 +95,7 @@ async function retryOperation<T>(
                 delay = Math.min(retryAfterMs, maxDelayMs);
             }
 
-            logger.warn(
+            logger.debug(
                 `[${moduleName}] Retry ${attempt}/${maxAttempts}: delay=${delay}ms error="${error.message || error}"`
             );
 
@@ -155,7 +155,7 @@ export class ApiClient {
         if (policy && this.rateLimitMax > 0) {
             const threshold = policy.throttleThreshold ?? 0.9;
             if (this.rateLimitUsage > this.rateLimitMax * threshold) {
-                this.logger.warn(
+                this.logger.debug(
                     `[${this.config.name}] Proactive throttle: usage=${this.rateLimitUsage}/${this.rateLimitMax}, waiting 2s`
                 );
                 await sleep(2000);

@@ -129,7 +129,7 @@ export default class CoinglassAPI {
 
         if (body.code !== '0') {
             if (body.code === '429') {
-                logger.error(
+                logger.debug(
                     `Rate limited! Usage: ${this.client.getRateLimitUsage().usage}/${this.client.getRateLimitUsage().max}. Waiting 5s...`
                 );
                 await sleep(5000);

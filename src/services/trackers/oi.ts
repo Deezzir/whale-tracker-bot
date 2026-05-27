@@ -99,10 +99,7 @@ function normalizeCoinglassCandleTimestampMs(timestamp: number): number {
 }
 
 function normalizeCoinglassIntervalStart(candleTimestamp: number): Date {
-    return normalizeIntervalStart(
-        normalizeCoinglassCandleTimestampMs(candleTimestamp),
-        COINGLASS_CANDLE_INTERVAL_MS
-    );
+    return normalizeIntervalStart(normalizeCoinglassCandleTimestampMs(candleTimestamp), COINGLASS_CANDLE_INTERVAL_MS);
 }
 
 function detectCoinglassGap(state: PairStatisticalState, now: Date): boolean {
@@ -298,6 +295,7 @@ export default class OIService extends Tracker {
 
     private async mainLoop(): Promise<void> {
         const refreshUniverseLoop = async () => {
+            await this.cancellableSleep(config.oi.refreshIntervalMs);
             while (this.running) {
                 try {
                     await this.refreshUniverse();
@@ -484,16 +482,13 @@ export default class OIService extends Tracker {
         entries: [string, PairStatisticalState][],
         startTime: number
     ): Promise<{ filled: number; failed: number; rateLimited: number; retried: number; localSeeded: number }> {
-        const minConcurrency = config.oi.coinglassBackfillMinConcurrency;
-        const maxConcurrency = config.oi.coinglassBackfillMaxConcurrency;
-        const retryBudget = config.oi.coinglassBackfillRetryBudget;
-
+        const MAX_RETRIES = 3;
+        let currentConcurrency = config.oi.coinglassBackfillConcurrency;
         let filled = 0;
         let failed = 0;
         let rateLimited = 0;
         let retried = 0;
         let localSeeded = 0;
-        let currentConcurrency = config.oi.coinglassBackfillConcurrency;
 
         const needsExternal: [string, PairStatisticalState][] = [];
         for (const [key, state] of entries) {
@@ -532,20 +527,12 @@ export default class OIService extends Tracker {
             );
         }
 
-        if (needsExternal.length === 0) {
-            return { filled, failed, rateLimited, retried, localSeeded };
-        }
+        if (needsExternal.length === 0) return { filled, failed, rateLimited, retried, localSeeded };
 
         const queue = [...needsExternal];
         const retryQueue: [string, PairStatisticalState][] = [];
 
-        let windowRequests = 0;
-        let windowRateLimited = 0;
-        const ADAPT_WINDOW = 20;
-
-        const processOne = async (
-            entry: [string, PairStatisticalState]
-        ): Promise<'ok' | 'empty' | 'retry' | 'failed'> => {
+        const processOne = async (entry: [string, PairStatisticalState]): Promise<boolean> => {
             const [, state] = entry;
             try {
                 const candles = await this.api.fetchOIHistory(
@@ -559,42 +546,18 @@ export default class OIService extends Tracker {
                     const observations = candles
                         .filter((c) => c.close > 0)
                         .map((c) => this.buildCoinglassObservation(state, c, normalizeCoinglassIntervalStart(c.time)));
+
                     if (observations.length > 0) {
                         await DBService.upsertOIObservations(observations).catch((err) =>
-                            this.logger.error(`Failed to persist backfill for ${state.exchange}:${state.instrumentId}: ${err}`)
+                            this.logger.error(
+                                `Failed to persist backfill for ${state.exchange}:${state.instrumentId}: ${err}`
+                            )
                         );
                     }
-                    return 'ok';
+                    return true;
                 }
-                return 'empty';
-            } catch (error) {
-                const errMsg = String(error);
-                if (
-                    errMsg.includes('429') ||
-                    errMsg.includes('Too Many') ||
-                    errMsg.includes('ECONNRESET') ||
-                    errMsg.includes('ETIMEDOUT') ||
-                    errMsg.includes('status code 5')
-                ) {
-                    return 'retry';
-                }
-                return 'failed';
-            }
-        };
-
-        const adaptConcurrency = (wasRateLimited: boolean) => {
-            if (wasRateLimited) windowRateLimited++;
-            windowRequests++;
-            if (windowRequests >= ADAPT_WINDOW) {
-                const ratio = windowRateLimited / windowRequests;
-                if (ratio > 0.1 && currentConcurrency > minConcurrency) {
-                    currentConcurrency--;
-                } else if (ratio < 0.02 && currentConcurrency < maxConcurrency) {
-                    currentConcurrency++;
-                }
-                windowRequests = 0;
-                windowRateLimited = 0;
-            }
+            } catch (error) { }
+            return false;
         };
 
         const runPool = async (q: [string, PairStatisticalState][], isRetry: boolean) => {
@@ -610,24 +573,16 @@ export default class OIService extends Tracker {
 
                     const result = await processOne(entry);
 
-                    if (result === 'ok') {
+                    if (result) {
                         filled++;
-                        adaptConcurrency(false);
-                    } else if (result === 'retry') {
+                    } else {
                         rateLimited++;
-                        adaptConcurrency(true);
                         if (!isRetry) {
                             retryQueue.push(entry);
                         } else {
                             failed++;
                             entry[1].status = 'DEGRADED_DATA';
                         }
-                    } else if (result === 'failed') {
-                        failed++;
-                        entry[1].status = 'DEGRADED_DATA';
-                        adaptConcurrency(false);
-                    } else {
-                        adaptConcurrency(false);
                     }
 
                     const processed = filled + failed + rateLimited;
@@ -642,19 +597,18 @@ export default class OIService extends Tracker {
             };
 
             const workers: Promise<void>[] = [];
-            for (let w = 0; w < currentConcurrency; w++) {
-                workers.push(worker());
-            }
+            for (let w = 0; w < currentConcurrency; w++) workers.push(worker());
             await Promise.all(workers);
         };
 
         await runPool(queue, false);
-        for (let attempt = 0; attempt < retryBudget && retryQueue.length > 0; attempt++) {
+
+        for (let attempt = 0; attempt < MAX_RETRIES && retryQueue.length > 0; attempt++) {
             if (!this.running) break;
             const batch = retryQueue.splice(0);
-            this.logger.info(`Backfill retry pass ${attempt + 1}/${retryBudget}: ${batch.length} pairs to retry`);
+            this.logger.info(`Backfill retry pass ${attempt + 1}/${MAX_RETRIES}: ${batch.length} pairs to retry`);
             await sleep(2000 + Math.random() * 1000);
-            await runPool(batch, attempt === retryBudget - 1);
+            await runPool(batch, attempt === MAX_RETRIES - 1);
             retried += batch.length - retryQueue.length;
         }
 
@@ -847,6 +801,7 @@ export default class OIService extends Tracker {
         let stored = 0;
         let skipped = 0;
         let anomaliesDetected = 0;
+        let transitioned = 0;
 
         for (const [, state] of hlPairs) {
             const snap = snapshotMap.get(state.instrumentId);
@@ -881,12 +836,17 @@ export default class OIService extends Tracker {
             if (!snap || snap.isDelisted || snap.openInterest <= 0) continue;
 
             try {
+                const prevStatus = state.status;
                 if (state.status === 'DEGRADED_DATA' && state.candleCount >= config.oi.warmupCandles) {
                     state.status = 'READY';
                 }
 
                 updatePairState(state, snap.openInterest);
                 state.lastObservationAt = intervalStart;
+
+                if (prevStatus === 'WARMUP' && state.status === 'READY') {
+                    transitioned++;
+                }
 
                 const detection = detectAnomaly(state);
                 if (detection) {
@@ -909,14 +869,14 @@ export default class OIService extends Tracker {
 
         this.lastScanTimestamp = Date.now();
         this.lastDataTimestamp = Date.now();
-        const cycleDuration = Date.now() - cycleStart;
+        const cycleDuration = (Date.now() - cycleStart) / 1000;
         const allHlStates = [...this.pairStates.values()].filter((s) => isHyperliquidSource(s.source));
         const ready = allHlStates.filter((s) => s.status === 'READY').length;
         const warming = allHlStates.filter((s) => s.status === 'WARMUP').length;
         const degraded = allHlStates.filter((s) => s.status === 'DEGRADED_DATA').length;
 
         this.logger.info(
-            `Hyperliquid scan complete: ${hlPairs.length} attempted, ${stored} stored, ${skipped} skipped, ${anomaliesDetected} anomalies [${cycleDuration}ms] | ` +
+            `Hyperliquid scan complete: ${hlPairs.length} attempted, ${stored} stored, ${skipped} skipped, ${anomaliesDetected} anomalies, ${transitioned} transitioned [${cycleDuration.toFixed(1)}s] | ` +
             `Status: ${ready} READY, ${warming} WARMUP, ${degraded} DEGRADED`
         );
     }
@@ -924,21 +884,27 @@ export default class OIService extends Tracker {
     private async coinglassScanAllPairs(): Promise<void> {
         if (!this.running) return;
 
+        let anomaliesDetected = 0;
+        let idx = 0;
+        let scanned = 0;
+        let failed = 0;
+        let transitioned = 0;
+        const exchangeStats = new Map<string, { scanned: number; failed: number }>();
+        const concurrency = config.oi.coinglassScanConcurrency;
+        const progressInterval = 500;
         const cycleStart = Date.now();
         const now = new Date();
+        this.logger.info('Coinglass scan cycle starting...');
 
         const allCoinglassPairs = [...this.pairStates.entries()].filter(([, s]) => isCoinglassSource(s.source));
         let gapDetected = 0;
-        for (const [pairKey, state] of allCoinglassPairs) {
+        for (const [, state] of allCoinglassPairs) {
             if (state.status === 'READY' && detectCoinglassGap(state, now)) {
                 enterDegraded(state);
                 gapDetected++;
-                this.logger.warn(`Gap detected for ${pairKey}: transitioning to DEGRADED_DATA for re-warmup`);
             }
         }
-        if (gapDetected > 0) {
-            this.logger.info(`Gap detection: ${gapDetected} pairs transitioned to DEGRADED_DATA`);
-        }
+        if (gapDetected > 0) this.logger.info(`Gap detection: ${gapDetected} pairs transitioned to DEGRADED_DATA`);
 
         const readyPairs = [...this.pairStates.entries()].filter(
             ([, s]) =>
@@ -946,25 +912,42 @@ export default class OIService extends Tracker {
                 isCoinglassSource(s.source)
         );
 
-        let anomaliesDetected = 0;
-        let idx = 0;
-        const concurrency = config.oi.coinglassScanConcurrency;
-
         const worker = async () => {
             while (true) {
                 if (!this.running) return;
                 const i = idx++;
                 if (i >= readyPairs.length) return;
                 const [pairKey, state] = readyPairs[i];
+                const prevStatus = state.status;
 
                 try {
                     const anomaly = await this.evaluateCoinglassPair(state);
+                    scanned++;
+                    const stats = exchangeStats.get(state.exchange) || { scanned: 0, failed: 0 };
+                    stats.scanned++;
+                    exchangeStats.set(state.exchange, stats);
+
+                    if (prevStatus === 'WARMUP' && state.status === 'READY') {
+                        transitioned++;
+                    }
+
                     if (anomaly) {
                         anomaliesDetected++;
                         await this.sendAlert(anomaly);
                     }
                 } catch (error) {
-                    this.logger.error(`Error evaluating ${pairKey}: ${error}`);
+                    failed++;
+                    const stats = exchangeStats.get(state.exchange) || { scanned: 0, failed: 0 };
+                    stats.failed++;
+                    exchangeStats.set(state.exchange, stats);
+                    this.logger.debug(`Error evaluating ${pairKey}: ${error}`);
+                }
+
+                if ((scanned + failed) % progressInterval === 0) {
+                    const elapsed = ((Date.now() - cycleStart) / 1000).toFixed(1);
+                    this.logger.info(
+                        `Coinglass scan progress: ${scanned + failed}/${readyPairs.length} pairs [${elapsed}s elapsed, ${failed} failed]`
+                    );
                 }
             }
         };
@@ -976,16 +959,22 @@ export default class OIService extends Tracker {
         await Promise.all(workers);
 
         this.lastScanTimestamp = Date.now();
-        const cycleDuration = Date.now() - cycleStart;
+        const cycleDuration = (Date.now() - cycleStart) / 1000;
         const allStates = [...this.pairStates.values()].filter((s) => isCoinglassSource(s.source));
         const ready = allStates.filter((s) => s.status === 'READY').length;
         const warming = allStates.filter((s) => s.status === 'WARMUP').length;
         const degraded = allStates.filter((s) => s.status === 'DEGRADED_DATA').length;
 
         this.logger.info(
-            `Coinglass scan complete: ${readyPairs.length} pairs, ${anomaliesDetected} anomalies [${cycleDuration}ms, concurrency=${concurrency}] | ` +
+            `Coinglass scan complete: ${readyPairs.length} pairs, ${anomaliesDetected} anomalies, ${failed} failed, ${transitioned} transitioned [${cycleDuration.toFixed(1)}s] | ` +
             `Status: ${ready} READY, ${warming} WARMUP, ${degraded} DEGRADED`
         );
+        if (exchangeStats.size > 0) {
+            const breakdown = [...exchangeStats.entries()]
+                .map(([ex, s]) => `${ex}: ${s.scanned}${s.failed > 0 ? ` (${s.failed} err)` : ''}`)
+                .join(', ');
+            this.logger.info(`Coinglass scan breakdown: ${breakdown}`);
+        }
     }
 
     private async evaluateCoinglassPair(state: PairStatisticalState): Promise<OIAnomalyEvent | null> {
@@ -998,18 +987,14 @@ export default class OIService extends Tracker {
 
         if (state.status === 'DEGRADED_DATA' && state.candleCount >= config.oi.warmupCandles) {
             state.status = 'READY';
-            this.logger.info(`Pair recovered: ${state.exchange}:${state.instrumentId} re-warmup complete, now READY`);
+            this.logger.debug(`Pair recovered: ${state.exchange}:${state.instrumentId} re-warmup complete, now READY`);
         }
 
         const latestCandle = candles[candles.length - 1];
-        if (!(latestCandle.close > 0)) {
-            return null;
-        }
+        if (!(latestCandle.close > 0)) return null;
         const intervalStart = normalizeCoinglassIntervalStart(latestCandle.time);
 
-        if (state.lastObservationAt && state.lastObservationAt.getTime() === intervalStart.getTime()) {
-            return null;
-        }
+        if (state.lastObservationAt && state.lastObservationAt.getTime() === intervalStart.getTime()) return null;
 
         const observation = this.buildCoinglassObservation(state, latestCandle, intervalStart);
         try {
@@ -1022,10 +1007,8 @@ export default class OIService extends Tracker {
 
         updatePairState(state, latestCandle.close);
         state.lastObservationAt = intervalStart;
-
         const detection = detectAnomaly(state);
         if (!detection) return null;
-
 
         let priceContext: { priceChangePercent: number | null } = { priceChangePercent: null };
         try {
@@ -1059,7 +1042,9 @@ export default class OIService extends Tracker {
             return;
         }
 
-        this.logger.info(`OI anomaly detected for ${event.exchange}:${event.instrumentId} (severity: ${event.severity}, trigger: ${event.triggerType}, OI change: ${event.deltaOIPercent.toFixed(1)}%), sending alert`);
+        this.logger.info(
+            `OI anomaly detected for ${event.exchange}:${event.instrumentId} (severity: ${event.severity}, trigger: ${event.triggerType}, OI change: ${event.deltaOIPercent.toFixed(1)}%), sending alert`
+        );
 
         const result = this.formatAlertMessage(event);
         if (!result) return;
