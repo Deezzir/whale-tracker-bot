@@ -363,12 +363,13 @@ export default class OIService extends Tracker {
     }
 
     private async refreshCoinglassUniverse(): Promise<number> {
-        const blacklist = config.oi.coinglassTokenBlacklist;
+        const blacklist = config.oi.tokenBlacklist;
         let totalPairs = 0;
 
         for (const exchange of config.oi.coinglassExchanges) {
             try {
                 let pairs = await this.api.fetchExchangePairs(exchange);
+                if (!pairs) throw new Error(`No pairs returned for ${exchange}`);
                 await DBService.upsertInstrumentUniverse(exchange, pairs);
 
                 const allPairsCount = pairs.length;
@@ -411,7 +412,7 @@ export default class OIService extends Tracker {
     }
 
     private async refreshHyperliquidUniverse(): Promise<number> {
-        const blacklist = config.oi.coinglassTokenBlacklist;
+        const blacklist = config.oi.tokenBlacklist;
         let totalPairs = 0;
 
         try {
@@ -467,7 +468,7 @@ export default class OIService extends Tracker {
 
     private async refreshUniverse(): Promise<void> {
         this.logger.info('Refreshing token universe...');
-        const blacklist = config.oi.coinglassTokenBlacklist;
+        const blacklist = config.oi.tokenBlacklist;
         if (blacklist.length > 0) this.logger.info(`Blacklist (${blacklist.length} tokens excluded)`);
 
         const result = await Promise.all([this.refreshCoinglassUniverse(), this.refreshHyperliquidUniverse()]);
@@ -541,7 +542,7 @@ export default class OIService extends Tracker {
                     this.defaultInterval,
                     config.oi.warmupCandles
                 );
-                if (candles.length > 0) {
+                if (candles && candles.length > 0) {
                     this.replayHistory(state, candles);
                     const observations = candles
                         .filter((c) => c.close > 0)
@@ -556,7 +557,7 @@ export default class OIService extends Tracker {
                     }
                     return true;
                 }
-            } catch (error) { }
+            } catch (error) {}
             return false;
         };
 
@@ -877,7 +878,7 @@ export default class OIService extends Tracker {
 
         this.logger.info(
             `Hyperliquid scan complete: ${hlPairs.length} attempted, ${stored} stored, ${skipped} skipped, ${anomaliesDetected} anomalies, ${transitioned} transitioned [${cycleDuration.toFixed(1)}s] | ` +
-            `Status: ${ready} READY, ${warming} WARMUP, ${degraded} DEGRADED`
+                `Status: ${ready} READY, ${warming} WARMUP, ${degraded} DEGRADED`
         );
     }
 
@@ -967,7 +968,7 @@ export default class OIService extends Tracker {
 
         this.logger.info(
             `Coinglass scan complete: ${readyPairs.length} pairs, ${anomaliesDetected} anomalies, ${failed} failed, ${transitioned} transitioned [${cycleDuration.toFixed(1)}s] | ` +
-            `Status: ${ready} READY, ${warming} WARMUP, ${degraded} DEGRADED`
+                `Status: ${ready} READY, ${warming} WARMUP, ${degraded} DEGRADED`
         );
         if (exchangeStats.size > 0) {
             const breakdown = [...exchangeStats.entries()]
@@ -979,6 +980,8 @@ export default class OIService extends Tracker {
 
     private async evaluateCoinglassPair(state: PairStatisticalState): Promise<OIAnomalyEvent | null> {
         const candles = await this.api.fetchOIHistory(state.exchange, state.instrumentId, this.defaultInterval, 1);
+
+        if (!candles) throw new Error(`Failed to fetch OI history for ${state.exchange}:${state.instrumentId}`);
 
         if (candles.length === 0) {
             if (state.status === 'READY') enterDegraded(state);
@@ -1011,15 +1014,15 @@ export default class OIService extends Tracker {
         if (!detection) return null;
 
         let priceContext: { priceChangePercent: number | null } = { priceChangePercent: null };
-        try {
-            const priceCandles = await this.api.fetchPriceHistory(
-                state.exchange,
-                state.instrumentId,
-                this.defaultInterval,
-                4
-            );
+        const priceCandles = await this.api.fetchPriceHistory(
+            state.exchange,
+            state.instrumentId,
+            this.defaultInterval,
+            4
+        );
+        if (priceCandles && priceCandles.length > 0) {
             priceContext = this.computeCoinglassPriceContext(priceCandles);
-        } catch (error) {
+        } else {
             this.logger.warn(`Price context fetch failed for ${state.exchange}:${state.instrumentId}`);
         }
 

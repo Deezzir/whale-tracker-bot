@@ -28,7 +28,7 @@ export interface ApiClientConfig {
     timeout?: number;
 }
 
-export interface ApiRequestConfig extends AxiosRequestConfig { }
+export interface ApiRequestConfig extends AxiosRequestConfig {}
 
 const RETRYABLE_NETWORK_CODES = new Set([
     'ECONNRESET',

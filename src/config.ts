@@ -31,7 +31,7 @@ function parseCoinglassExchanges(value: string): string[] {
     if (invalidExchanges.length > 0) {
         throw new Error(
             `COINGLASS_EXCHANGES cannot include externally managed exchanges: ${invalidExchanges.join(', ')}. ` +
-            'Remove them from COINGLASS_EXCHANGES.'
+                'Remove them from COINGLASS_EXCHANGES.'
         );
     }
 
@@ -84,6 +84,7 @@ export const config = {
         api: 'https://api.hyperliquid.xyz/info',
         hypurrscanExplorer: 'https://hypurrscan.io',
         hyperdashExplorer: 'https://hyperdash.com',
+        minTradeNotionalUSD: parseFloat(optionalEnv('HS_MIN_TRADE_NOTIONAL_USD', '100')),
         batchSize: 1000,
         freshWindowMs: parseInt(optionalEnv('HS_FRESH_WINDOW_MS', String(50 * 60 * 60 * 1000)), 10),
         batchFlushIntervalMs: 60 * 1000, // 1 minute
@@ -179,7 +180,7 @@ export const config = {
         coinglassExchanges: parseCoinglassExchanges(
             process.env['COINGLASS_EXCHANGES'] || 'Gate,Bybit,Binance,OKX,Kraken'
         ),
-        coinglassTokenBlacklist: process.env['COINGLASS_BLACKLIST']
+        tokenBlacklist: process.env['COINGLASS_BLACKLIST']
             ? process.env['COINGLASS_BLACKLIST'].split(',').map((t) => t.trim().toUpperCase())
             : [],
         coinglassBackfillConcurrency: parseInt(

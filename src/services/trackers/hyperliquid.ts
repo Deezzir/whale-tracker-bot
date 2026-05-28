@@ -749,7 +749,6 @@ export default class HyperliquidService extends Tracker {
             this.lastDataTimestamp = Date.now();
 
             try {
-                this.logger.info(`Flushing trade batch of size ${batchToFlush.length}`);
                 await DBService.addTradesBulk(batchToFlush, config.hyperliquid.aggregationWindowMs);
                 for (const trade of batchToFlush) {
                     const keyStr = `${trade.wallet}:${trade.coin}:${trade.direction}`;
@@ -768,10 +767,10 @@ export default class HyperliquidService extends Tracker {
     }
 
     async handleTrade(trade: WsTrade, coin: string): Promise<void> {
-        const MIN_TRADE_NOTIONAL_USD = 1000;
-
         const notional = parseFloat(trade.px) * parseFloat(trade.sz);
-        if (!Number.isFinite(notional) || notional < MIN_TRADE_NOTIONAL_USD) return;
+        if (!Number.isFinite(notional) || notional < config.hyperliquid.minTradeNotionalUSD) {
+            return;
+        }
 
         if (this.spotCoinMap.has(coin)) {
             const displayCoin = this.spotCoinMap.get(coin) ?? coin;
@@ -796,14 +795,14 @@ export default class HyperliquidService extends Tracker {
                 });
             }
         } else {
-            if (trade.side === 'B') {
-                const taker = trade.users[0]; // buyer/taker
-                if (!taker) return;
-                this.tradeBatch.push({ wallet: taker, coin, notional, tradeTime: trade.time, direction: 'long' });
-            } else {
-                const taker = trade.users[1]; // seller/taker
-                if (!taker) return;
-                this.tradeBatch.push({ wallet: taker, coin, notional, tradeTime: trade.time, direction: 'short' });
+            // users[0] = buyer (long exposure), users[1] = seller (short exposure)
+            const buyer = trade.users[0];
+            const seller = trade.users[1];
+            if (buyer) {
+                this.tradeBatch.push({ wallet: buyer, coin, notional, tradeTime: trade.time, direction: 'long' });
+            }
+            if (seller) {
+                this.tradeBatch.push({ wallet: seller, coin, notional, tradeTime: trade.time, direction: 'short' });
             }
         }
 
@@ -1051,8 +1050,18 @@ export default class HyperliquidService extends Tracker {
             return;
         }
 
-        // Use only the highest-priority branch (BIG_WHALE > FRESH_WALLET > WHALE_ACTIVITY)
-        const branch = branches[0];
+        for (const branch of branches) {
+            await this.sendBranchAlert(branch, candidate, state, portfolio, positionState!);
+        }
+    }
+
+    private async sendBranchAlert(
+        branch: AlertBranch,
+        candidate: HyperAggregationRecord,
+        state: TraderState,
+        portfolio: TraderPortfolio,
+        positionState: AssetPosition
+    ): Promise<void> {
         const alertChannels = this.getChannelsForBranch(branch);
 
         const lastAlerts = await DBService.getLastAlerts(
