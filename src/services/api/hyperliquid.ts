@@ -244,8 +244,11 @@ export default class HyperliquidAPI {
             if (meta) {
                 let accountValue = 0.0;
                 for (const balance of data.balances) {
-                    const universe = meta.universe.find((u) => meta.tokens[u.tokens[0]].name === balance.coin);
-                    const tokenMeta = meta.assetMeta[universe ? universe.index : -1];
+                    const universe = meta.universe.find((u) => {
+                        const token = meta.tokens.find((t) => t.index === u.tokens[0]);
+                        return token && token.name === balance.coin;
+                    });
+                    const tokenMeta = universe ? meta.assetMeta[universe.index] : undefined;
                     balance.px = tokenMeta ? tokenMeta.markPx : '0';
                     accountValue += parseFloat(balance.total) * parseFloat(balance.px);
                 }
@@ -439,7 +442,7 @@ export default class HyperliquidAPI {
             await this.redis.setEx(cacheKey, config.monitor.cacheTTLMs / 1000, JSON.stringify(data));
             return data;
         } catch (error) {
-            logger.error(`Failed to fetch token details for ${tokenId}: ${error}`);
+            logger.warn(`Failed to fetch token details for ${tokenId}: ${error}`);
             return null;
         }
     }

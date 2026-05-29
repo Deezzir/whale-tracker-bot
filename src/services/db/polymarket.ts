@@ -148,6 +148,9 @@ export default class PolymarketDBService {
                 const key = `${trade.proxyWallet}:${trade.conditionId}:${trade.outcomeIndex}:${dateKey}`;
                 const isBuy = trade.side === 'BUY';
                 const existing = aggregated.get(key);
+                const nextOutcome = (trade.outcome || '').trim();
+                const nextTitle = (trade.title || '').trim();
+                const nextSlug = (trade.slug || '').trim();
 
                 if (existing) {
                     existing.totalBuyUsd += isBuy ? trade.usdAmount : 0;
@@ -157,9 +160,9 @@ export default class PolymarketDBService {
                     existing.tradeCount += 1;
                     if (trade.timestamp < existing.firstTradeAt) existing.firstTradeAt = trade.timestamp;
                     if (trade.timestamp > existing.lastTradeAt) existing.lastTradeAt = trade.timestamp;
-                    existing.outcome = trade.outcome;
-                    existing.title = trade.title || '';
-                    existing.slug = trade.slug || '';
+                    if (nextOutcome) existing.outcome = nextOutcome;
+                    if (nextTitle) existing.title = nextTitle;
+                    if (nextSlug) existing.slug = nextSlug;
                     continue;
                 }
 
@@ -177,34 +180,63 @@ export default class PolymarketDBService {
                     tradeCount: 1,
                     firstTradeAt: trade.timestamp,
                     lastTradeAt: trade.timestamp,
-                    outcome: trade.outcome,
-                    title: trade.title || '',
-                    slug: trade.slug || ''
+                    outcome: nextOutcome,
+                    title: nextTitle,
+                    slug: nextSlug
                 });
             }
 
-            const bulkOps = Array.from(aggregated.values()).map((entry) => ({
-                updateOne: {
-                    filter: entry.filter,
-                    update: {
-                        $inc: {
-                            totalBuyUsd: entry.totalBuyUsd,
-                            totalSellUsd: entry.totalSellUsd,
-                            netUsd: entry.netUsd,
-                            priceSum: entry.priceSum,
-                            tradeCount: entry.tradeCount
-                        },
-                        $min: { firstTradeAt: entry.firstTradeAt },
-                        $max: { lastTradeAt: entry.lastTradeAt },
-                        $set: {
-                            outcome: entry.outcome,
-                            title: entry.title,
-                            slug: entry.slug
-                        }
+            const bulkOps = Array.from(aggregated.values()).map((entry) => {
+                const setFields: Record<string, string> = {};
+                if (entry.outcome) setFields.outcome = entry.outcome;
+                if (entry.title) setFields.title = entry.title;
+                if (entry.slug) setFields.slug = entry.slug;
+
+                const setOnInsertFields: Record<string, string> = {};
+                if (!setFields.outcome) setOnInsertFields.outcome = entry.outcome || '';
+                if (!setFields.title) setOnInsertFields.title = entry.title || '';
+                if (!setFields.slug) setOnInsertFields.slug = entry.slug || '';
+
+                const update: {
+                    $inc: {
+                        totalBuyUsd: number;
+                        totalSellUsd: number;
+                        netUsd: number;
+                        priceSum: number;
+                        tradeCount: number;
+                    };
+                    $min: { firstTradeAt: Date };
+                    $max: { lastTradeAt: Date };
+                    $set?: Record<string, string>;
+                    $setOnInsert?: Record<string, string>;
+                } = {
+                    $inc: {
+                        totalBuyUsd: entry.totalBuyUsd,
+                        totalSellUsd: entry.totalSellUsd,
+                        netUsd: entry.netUsd,
+                        priceSum: entry.priceSum,
+                        tradeCount: entry.tradeCount
                     },
-                    upsert: true
+                    $min: { firstTradeAt: entry.firstTradeAt },
+                    $max: { lastTradeAt: entry.lastTradeAt }
+                };
+
+                if (Object.keys(setFields).length > 0) {
+                    update.$set = setFields;
                 }
-            }));
+
+                if (Object.keys(setOnInsertFields).length > 0) {
+                    update.$setOnInsert = setOnInsertFields;
+                }
+
+                return {
+                    updateOne: {
+                        filter: entry.filter,
+                        update,
+                        upsert: true
+                    }
+                };
+            });
 
             const start = performance.now();
             const result = await PolyAggregationModel.bulkWrite(bulkOps, { ordered: false });

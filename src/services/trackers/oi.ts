@@ -1,6 +1,6 @@
 import { Tracker } from '../../common/tracker';
 import { config } from '../../config';
-import APIService, { Interval, OICandle, PriceCandle } from '../api/coinglass';
+import APIService, { Interval, OICandle } from '../api/coinglass';
 import DBService, { TriggerType, Severity } from '../db/oi';
 import { getRedisClient } from '../redis';
 import { sleep } from '../../common/utils';
@@ -130,9 +130,6 @@ interface OIAnomalyEvent {
     deltaOI: number;
     deltaOIPercent: number;
     severity: Severity;
-    priceContext: {
-        priceChangePercent: number | null;
-    };
     detectedAt: Date;
 }
 
@@ -363,8 +360,10 @@ export default class OIService extends Tracker {
     }
 
     private async refreshCoinglassUniverse(): Promise<number> {
-        const blacklist = config.oi.tokenBlacklist;
+        const whitelist = config.oi.tokenWhitelist;
         let totalPairs = 0;
+
+        if (whitelist.length > 0) this.logger.info(`Coinglass whitelisting: (${whitelist.length} tokens included)`);
 
         for (const exchange of config.oi.coinglassExchanges) {
             try {
@@ -373,8 +372,8 @@ export default class OIService extends Tracker {
                 await DBService.upsertInstrumentUniverse(exchange, pairs);
 
                 const allPairsCount = pairs.length;
-                if (blacklist.length > 0) {
-                    pairs = pairs.filter((p) => !blacklist.includes(p.baseAsset.toUpperCase()));
+                if (whitelist.length > 0) {
+                    pairs = pairs.filter((p) => whitelist.includes(p.baseAsset.toUpperCase()));
                 }
 
                 for (const pair of pairs) {
@@ -400,7 +399,7 @@ export default class OIService extends Tracker {
 
                 totalPairs += pairs.length;
                 this.logger.info(
-                    `${exchange}: ${pairs.length} pairs loaded${blacklist.length > 0 ? ` (filtered from ${allPairsCount})` : ''}`
+                    `${exchange}: ${pairs.length} pairs loaded${whitelist.length > 0 ? ` (filtered from ${allPairsCount})` : ''}`
                 );
                 await sleep(1500);
             } catch (error) {
@@ -412,7 +411,6 @@ export default class OIService extends Tracker {
     }
 
     private async refreshHyperliquidUniverse(): Promise<number> {
-        const blacklist = config.oi.tokenBlacklist;
         let totalPairs = 0;
 
         try {
@@ -428,13 +426,7 @@ export default class OIService extends Tracker {
             }));
             await DBService.upsertInstrumentUniverse('Hyperliquid', instruments);
 
-            const allCount = snapshots.length;
-            const filtered =
-                blacklist.length > 0
-                    ? snapshots.filter((s) => !blacklist.includes(s.baseAsset.toUpperCase()))
-                    : snapshots;
-
-            for (const snap of filtered) {
+            for (const snap of snapshots) {
                 const key = `Hyperliquid:${snap.instrumentId}`;
                 if (!this.pairStates.has(key)) {
                     this.pairStates.set(key, {
@@ -455,10 +447,8 @@ export default class OIService extends Tracker {
                 }
             }
 
-            totalPairs += filtered.length;
-            this.logger.info(
-                `Hyperliquid: ${filtered.length} pairs loaded${blacklist.length > 0 ? ` (filtered from ${allCount})` : ''}`
-            );
+            totalPairs += snapshots.length;
+            this.logger.info(`Hyperliquid: ${snapshots.length} pairs loaded`);
         } catch (error) {
             this.logger.error(`Failed to refresh Hyperliquid: ${error}`);
         }
@@ -468,8 +458,6 @@ export default class OIService extends Tracker {
 
     private async refreshUniverse(): Promise<void> {
         this.logger.info('Refreshing token universe...');
-        const blacklist = config.oi.tokenBlacklist;
-        if (blacklist.length > 0) this.logger.info(`Blacklist (${blacklist.length} tokens excluded)`);
 
         const result = await Promise.all([this.refreshCoinglassUniverse(), this.refreshHyperliquidUniverse()]);
         const totalPairs = result.reduce((sum, count) => sum + count, 0);
@@ -484,7 +472,7 @@ export default class OIService extends Tracker {
         startTime: number
     ): Promise<{ filled: number; failed: number; rateLimited: number; retried: number; localSeeded: number }> {
         const MAX_RETRIES = 3;
-        let currentConcurrency = config.oi.coinglassBackfillConcurrency;
+        let CONCURRENCY = 4;
         let filled = 0;
         let failed = 0;
         let rateLimited = 0;
@@ -591,14 +579,14 @@ export default class OIService extends Tracker {
                         const { usage, max } = this.api.getRateLimitUsage();
                         const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
                         this.logger.info(
-                            `Backfill progress: ${processed}/${entries.length} (${filled} ok, ${failed} failed, ${rateLimited} rate-limited, ${localSeeded} local) [${elapsed}s, concurrency=${currentConcurrency}, API: ${usage}/${max}]`
+                            `Backfill progress: ${processed}/${entries.length} (${filled} ok, ${failed} failed, ${rateLimited} rate-limited, ${localSeeded} local) [${elapsed}s, concurrency=${CONCURRENCY}, API: ${usage}/${max}]`
                         );
                     }
                 }
             };
 
             const workers: Promise<void>[] = [];
-            for (let w = 0; w < currentConcurrency; w++) workers.push(worker());
+            for (let w = 0; w < CONCURRENCY; w++) workers.push(worker());
             await Promise.all(workers);
         };
 
@@ -737,28 +725,6 @@ export default class OIService extends Tracker {
         };
     }
 
-    computeCoinglassPriceContext(priceCandles: PriceCandle[]): { priceChangePercent: number | null } {
-        if (priceCandles.length < 2) return { priceChangePercent: null };
-        const oldest = priceCandles[0].close;
-        const latest = priceCandles[priceCandles.length - 1].close;
-        const priceChangePercent = oldest > 0 ? ((latest - oldest) / oldest) * 100 : 0;
-        return { priceChangePercent };
-    }
-
-    private async computeHLPriceContext(instrumentId: string): Promise<{ priceChangePercent: number | null }> {
-        try {
-            const recent = await DBService.getRecentOIObservations('Hyperliquid', instrumentId, 4);
-            const prices = recent.filter((o) => o.markPrice != null && o.markPrice > 0).map((o) => o.markPrice!);
-            if (prices.length < 2) return { priceChangePercent: null };
-            const oldest = prices[0];
-            const latest = prices[prices.length - 1];
-            const priceChangePercent = oldest > 0 ? ((latest - oldest) / oldest) * 100 : 0;
-            return { priceChangePercent };
-        } catch {
-            return { priceChangePercent: null };
-        }
-    }
-
     private async hlScanAllPairs(): Promise<void> {
         if (!this.running) return;
 
@@ -855,11 +821,8 @@ export default class OIService extends Tracker {
                     state.cusumScore = 0;
                     this.lastDataTimestamp = Date.now();
 
-                    const priceContext = await this.computeHLPriceContext(state.instrumentId);
-
                     await this.sendAlert({
                         ...detection,
-                        priceContext,
                         detectedAt: new Date()
                     });
                 }
@@ -885,17 +848,22 @@ export default class OIService extends Tracker {
     private async coinglassScanAllPairs(): Promise<void> {
         if (!this.running) return;
 
+        const CONCURRENCY = 2;
+        const safeRpsLimit = Math.max(config.coinglass.rateLimit.requestsPerSecond, 0.1);
+        const targetRpm = safeRpsLimit * 60;
+        const perWorkerIntervalMs = Math.ceil((1000 * CONCURRENCY) / safeRpsLimit);
         let anomaliesDetected = 0;
         let idx = 0;
         let scanned = 0;
         let failed = 0;
         let transitioned = 0;
         const exchangeStats = new Map<string, { scanned: number; failed: number }>();
-        const concurrency = config.oi.coinglassScanConcurrency;
         const progressInterval = 500;
         const cycleStart = Date.now();
         const now = new Date();
-        this.logger.info('Coinglass scan cycle starting...');
+        this.logger.info(
+            `Coinglass scan cycle starting... [concurrency=${CONCURRENCY}, target=${targetRpm.toFixed(1)} rpm (${safeRpsLimit.toFixed(2)} rps), workerInterval=${perWorkerIntervalMs}ms]`
+        );
 
         const allCoinglassPairs = [...this.pairStates.entries()].filter(([, s]) => isCoinglassSource(s.source));
         let gapDetected = 0;
@@ -916,6 +884,7 @@ export default class OIService extends Tracker {
         const worker = async () => {
             while (true) {
                 if (!this.running) return;
+                const iterationStartedAt = Date.now();
                 const i = idx++;
                 if (i >= readyPairs.length) return;
                 const [pairKey, state] = readyPairs[i];
@@ -950,13 +919,15 @@ export default class OIService extends Tracker {
                         `Coinglass scan progress: ${scanned + failed}/${readyPairs.length} pairs [${elapsed}s elapsed, ${failed} failed]`
                     );
                 }
+
+                const elapsedMs = Date.now() - iterationStartedAt;
+                const waitMs = perWorkerIntervalMs - elapsedMs;
+                if (waitMs > 0) await sleep(waitMs);
             }
         };
 
         const workers: Promise<void>[] = [];
-        for (let w = 0; w < concurrency; w++) {
-            workers.push(worker());
-        }
+        for (let w = 0; w < CONCURRENCY; w++) workers.push(worker());
         await Promise.all(workers);
 
         this.lastScanTimestamp = Date.now();
@@ -1013,24 +984,10 @@ export default class OIService extends Tracker {
         const detection = detectAnomaly(state);
         if (!detection) return null;
 
-        let priceContext: { priceChangePercent: number | null } = { priceChangePercent: null };
-        const priceCandles = await this.api.fetchPriceHistory(
-            state.exchange,
-            state.instrumentId,
-            this.defaultInterval,
-            4
-        );
-        if (priceCandles && priceCandles.length > 0) {
-            priceContext = this.computeCoinglassPriceContext(priceCandles);
-        } else {
-            this.logger.warn(`Price context fetch failed for ${state.exchange}:${state.instrumentId}`);
-        }
-
         state.cusumScore = 0;
 
         return {
             ...detection,
-            priceContext,
             detectedAt: new Date()
         };
     }
@@ -1149,13 +1106,6 @@ export default class OIService extends Tracker {
             `📊 OI: ${fmtOI(event.previousOI)} → ${fmtOI(event.currentOI)} (<b>${event.deltaOIPercent >= 0 ? '+' : ''}${event.deltaOIPercent.toFixed(1)}%</b>)`,
             `📏 Trigger: ${event.triggerValue.toFixed(2)} (threshold: ${this.getThresholdForType(event.triggerType)})`
         ];
-
-        if (event.priceContext.priceChangePercent !== null) {
-            const priceDir = event.priceContext.priceChangePercent >= 0 ? '📈' : '📉';
-            lines.push(
-                `${priceDir} Price: ${event.priceContext.priceChangePercent >= 0 ? '+' : ''}${event.priceContext.priceChangePercent.toFixed(2)}%`
-            );
-        }
 
         lines.push(``, `🕐 ${event.detectedAt.toISOString().replace('T', ' ').slice(0, 19)} UTC`);
 

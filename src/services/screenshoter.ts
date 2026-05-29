@@ -84,7 +84,7 @@ export default class ScreenshotService {
         prehook?: (page: Page) => Promise<void>,
         viewport = { width: 1280, height: 1400 }
     ): Promise<Buffer | null> {
-        const MAX_RETRIES = 3;
+        const MAX_RETRIES = 2;
         return retry(
             () => this.captureInternal(url, selector, waitFn, prehook, viewport),
             { attempts: MAX_RETRIES },
@@ -129,9 +129,9 @@ export default class ScreenshotService {
                 Object.defineProperty(navigator, 'webdriver', { get: () => false });
             });
 
-            await page.goto(url, { waitUntil: 'networkidle2' });
-            await page.waitForSelector('body', { timeout: 10_000 });
-            await sleep(3000);
+            await page.goto(url, { waitUntil: 'networkidle2', timeout: 15_000 });
+            await page.waitForSelector('body', { timeout: 5_000 });
+            await sleep(2000);
 
             if (prehook) await prehook(page);
 

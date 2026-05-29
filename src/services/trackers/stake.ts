@@ -347,10 +347,14 @@ export default class StakeService extends Tracker {
 
         let screenshot: Buffer | null = null;
         if (config.puppeteer.screenshotEnabled) {
-            screenshot = await this.screenshoter.capture(
-                `${this.url}/sports/home?iid=${candidate.iid}&modal=bet`,
-                'div[data-modal-card="true"]'
-            );
+            try {
+                screenshot = await this.screenshoter.capture(
+                    `${this.url}/sports/home?iid=${candidate.iid}&modal=bet`,
+                    'div[data-modal-card="true"]'
+                );
+            } catch (err) {
+                this.logger.warn(`Screenshot failed for bet ${candidate.iid}, sending alert without image: ${err}`);
+            }
         }
 
         for (let i = 0; i < this.channels.length; i++) {

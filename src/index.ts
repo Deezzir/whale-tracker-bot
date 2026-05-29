@@ -48,7 +48,7 @@ function getEnabledTrackers(): Tracker[] {
                     );
                     break;
                 case StakeService.name:
-                    services.push(new StakeService(telegram, [{ chatId: config.telegram.stakeChatID }]));
+                    services.push(new StakeService(telegram, [{ chatId: config.telegram.stakeChatID }], false, true));
                     break;
                 case PolymarketService.name:
                     services.push(new PolymarketService(telegram, [{ chatId: config.telegram.polyChatID }]));

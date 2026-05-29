@@ -84,7 +84,7 @@ export const config = {
         api: 'https://api.hyperliquid.xyz/info',
         hypurrscanExplorer: 'https://hypurrscan.io',
         hyperdashExplorer: 'https://hyperdash.com',
-        minTradeNotionalUSD: parseFloat(optionalEnv('HS_MIN_TRADE_NOTIONAL_USD', '100')),
+        minTradeNotionalUSD: parseFloat(optionalEnv('HS_MIN_TRADE_NOTIONAL_USD', '500')),
         batchSize: 1000,
         freshWindowMs: parseInt(optionalEnv('HS_FRESH_WINDOW_MS', String(50 * 60 * 60 * 1000)), 10),
         batchFlushIntervalMs: 60 * 1000, // 1 minute
@@ -170,27 +170,36 @@ export const config = {
             maxDelayMs: 30000
         },
         rateLimit: {
-            requestsPerSecond: 1.2,
+            requestsPerSecond: 1.25,
             headerUsageKey: 'api-key-use-limit',
             headerLimitKey: 'api-key-max-limit',
             throttleThreshold: 0.9
+        }
+    },
+    aster: {
+        api: 'https://fapi.asterdex.com',
+        retry: {
+            maxAttempts: 4,
+            initialDelayMs: 1000,
+            backoffMultiplier: 2.5,
+            maxDelayMs: 30000
+        },
+        rateLimit: {
+            requestsPerSecond: 38,
+            burstCapacity: 10,
+            headerUsageKey: 'x-mbx-used-weight-1m',
+            throttleThreshold: 0.85
         }
     },
     oi: {
         coinglassExchanges: parseCoinglassExchanges(
             process.env['COINGLASS_EXCHANGES'] || 'Gate,Bybit,Binance,OKX,Kraken'
         ),
-        tokenBlacklist: process.env['COINGLASS_BLACKLIST']
-            ? process.env['COINGLASS_BLACKLIST'].split(',').map((t) => t.trim().toUpperCase())
+        tokenWhitelist: process.env['COINGLASS_WHITELIST']
+            ? process.env['COINGLASS_WHITELIST'].split(',').map((t) => t.trim().toUpperCase())
             : [],
-        coinglassBackfillConcurrency: parseInt(
-            optionalEnv('COINGLASS_BACKFILL_CONCURRENCY', optionalEnv('COINGLASS_WARMUP_CONCURRENCY', '5')),
-            10
-        ),
         refreshIntervalMs: parseInt(optionalEnv('COINGLASS_REFRESH_INTERVAL_MS', '3600000'), 10),
         coinglassGapThresholdIntervals: parseInt(optionalEnv('COINGLASS_GAP_THRESHOLD_INTERVALS', '3'), 10),
-        coinglassBackfillMaxConcurrency: 4,
-        coinglassScanConcurrency: 3,
 
         cooldownSeconds: 21600, // 6 hours
         warmupCandles: 96, // 48 hours of 30m candles

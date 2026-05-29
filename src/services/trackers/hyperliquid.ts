@@ -702,10 +702,8 @@ export default class HyperliquidService extends Tracker {
             if (coinToken) spotPair = spotStats.universe.find((u) => u.tokens[0] === coinToken.index);
 
             if (spotPair) {
-                const baseTokenIndex = spotPair.tokens[0];
-                const quoteTokenIndex = spotPair.tokens[1];
-                const baseToken = spotStats.tokens[baseTokenIndex];
-                const quoteToken = spotStats.tokens[quoteTokenIndex];
+                const baseToken = spotStats.tokens.find((t) => t.index === spotPair!.tokens[0]);
+                const quoteToken = spotStats.tokens.find((t) => t.index === spotPair!.tokens[1]);
                 const spotCtx = spotStats.assetMeta[spotPair.index];
 
                 lines.push('🔶 <b>Spot</b>');
@@ -772,11 +770,14 @@ export default class HyperliquidService extends Tracker {
             return;
         }
 
+        const isZeroAddress = (wallet: string) => wallet === '0x0000000000000000000000000000000000000000';
+
+        const buyer = trade.users[0];
+        const seller = trade.users[1];
+
         if (this.spotCoinMap.has(coin)) {
             const displayCoin = this.spotCoinMap.get(coin) ?? coin;
-            const buyer = trade.users[0];
-            const seller = trade.users[1];
-            if (buyer) {
+            if (buyer && !isZeroAddress(buyer)) {
                 this.tradeBatch.push({
                     wallet: buyer,
                     coin: displayCoin,
@@ -785,7 +786,7 @@ export default class HyperliquidService extends Tracker {
                     direction: 'spot'
                 });
             }
-            if (seller) {
+            if (seller && !isZeroAddress(seller)) {
                 this.tradeBatch.push({
                     wallet: seller,
                     coin: displayCoin,
@@ -795,13 +796,10 @@ export default class HyperliquidService extends Tracker {
                 });
             }
         } else {
-            // users[0] = buyer (long exposure), users[1] = seller (short exposure)
-            const buyer = trade.users[0];
-            const seller = trade.users[1];
-            if (buyer) {
+            if (buyer && !isZeroAddress(buyer)) {
                 this.tradeBatch.push({ wallet: buyer, coin, notional, tradeTime: trade.time, direction: 'long' });
             }
-            if (seller) {
+            if (seller && !isZeroAddress(seller)) {
                 this.tradeBatch.push({ wallet: seller, coin, notional, tradeTime: trade.time, direction: 'short' });
             }
         }
@@ -1050,8 +1048,33 @@ export default class HyperliquidService extends Tracker {
             return;
         }
 
+        let screenshot: Buffer | null = null;
+        if (config.puppeteer.screenshotEnabled) {
+            try {
+                screenshot = await this.screenshoter.capture(
+                    `${this.hypurrscanExplorer}/address/${candidate.wallet}#perps`,
+                    undefined,
+                    () => {
+                        const result = document.evaluate(
+                            '//div[text()=" Overview "]/div/span',
+                            document,
+                            null,
+                            XPathResult.FIRST_ORDERED_NODE_TYPE,
+                            null
+                        );
+                        const el = result.singleNodeValue as Element | null;
+                        if (!el?.textContent) return false;
+                        const num = parseFloat(el.textContent.replace(/,/g, '').replace('$', ''));
+                        return !isNaN(num) && num > 0;
+                    }
+                );
+            } catch (err) {
+                this.logger.warn(`Screenshot failed for ${candidate.wallet}, sending alert without image: ${err}`);
+            }
+        }
+
         for (const branch of branches) {
-            await this.sendBranchAlert(branch, candidate, state, portfolio, positionState!);
+            await this.sendBranchAlert(branch, candidate, state, portfolio, positionState!, screenshot);
         }
     }
 
@@ -1060,7 +1083,8 @@ export default class HyperliquidService extends Tracker {
         candidate: HyperAggregationRecord,
         state: TraderState,
         portfolio: TraderPortfolio,
-        positionState: AssetPosition
+        positionState: AssetPosition,
+        screenshot: Buffer | null
     ): Promise<void> {
         const alertChannels = this.getChannelsForBranch(branch);
 
@@ -1127,26 +1151,6 @@ export default class HyperliquidService extends Tracker {
         if (!result) return;
         const { msg, buttons } = result;
 
-        let screenshot: Buffer | null = null;
-        if (config.puppeteer.screenshotEnabled) {
-            screenshot = await this.screenshoter.capture(
-                `${this.hypurrscanExplorer}/address/${candidate.wallet}#perps`,
-                undefined,
-                () => {
-                    const result = document.evaluate(
-                        '//div[text()=" Overview "]/div/span',
-                        document,
-                        null,
-                        XPathResult.FIRST_ORDERED_NODE_TYPE,
-                        null
-                    );
-                    const el = result.singleNodeValue as Element | null;
-                    if (!el?.textContent) return false;
-                    const num = parseFloat(el.textContent.replace(/,/g, '').replace('$', ''));
-                    return !isNaN(num) && num > 0;
-                }
-            );
-        }
         for (let i = 0; i < alertChannels.length; i++) {
             if (i > 0) await sleep(1000);
             const channel = alertChannels[i];
@@ -1276,23 +1280,27 @@ export default class HyperliquidService extends Tracker {
 
         let screenshot: Buffer | null = null;
         if (config.puppeteer.screenshotEnabled) {
-            screenshot = await this.screenshoter.capture(
-                `${this.hypurrscanExplorer}/address/${candidate.wallet}#spot`,
-                undefined,
-                () => {
-                    const result = document.evaluate(
-                        '//div[text()=" Overview "]/div/span',
-                        document,
-                        null,
-                        XPathResult.FIRST_ORDERED_NODE_TYPE,
-                        null
-                    );
-                    const el = result.singleNodeValue as Element | null;
-                    if (!el?.textContent) return false;
-                    const num = parseFloat(el.textContent.replace(/,/g, '').replace('$', ''));
-                    return !isNaN(num) && num > 0;
-                }
-            );
+            try {
+                screenshot = await this.screenshoter.capture(
+                    `${this.hypurrscanExplorer}/address/${candidate.wallet}#spot`,
+                    undefined,
+                    () => {
+                        const result = document.evaluate(
+                            '//div[text()=" Overview "]/div/span',
+                            document,
+                            null,
+                            XPathResult.FIRST_ORDERED_NODE_TYPE,
+                            null
+                        );
+                        const el = result.singleNodeValue as Element | null;
+                        if (!el?.textContent) return false;
+                        const num = parseFloat(el.textContent.replace(/,/g, '').replace('$', ''));
+                        return !isNaN(num) && num > 0;
+                    }
+                );
+            } catch (err) {
+                this.logger.warn(`Screenshot failed for ${candidate.wallet} spot, sending alert without image: ${err}`);
+            }
         }
         for (let i = 0; i < alertChannels.length; i++) {
             if (i > 0) await sleep(1000);

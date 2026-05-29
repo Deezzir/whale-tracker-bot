@@ -1,7 +1,7 @@
 import { InlineKeyboardMarkup } from 'telegraf/types';
 import { Tracker } from '../../common/tracker';
 import { config } from '../../config';
-import APIService, { Trade } from '../api/polymarket';
+import APIService, { Market, Trade } from '../api/polymarket';
 import DBService, { PolyAggregationRecord, PolyTradeInput, PositionKey } from '../db/polymarket';
 import { escapeHtml, formatCurrency, formatDate, sleep, withTimeout } from '../../common/utils';
 
@@ -78,6 +78,37 @@ function isSportMarket(title: string): boolean {
 function isEsportsMarket(title: string): boolean {
     const lower = title.toLowerCase();
     return ESPORTS_KEYWORDS.some((kw) => lower.includes(kw));
+}
+
+function normalizeText(value: unknown): string {
+    return typeof value === 'string' ? value.trim() : '';
+}
+
+function parseMarketOutcomes(rawOutcomes: unknown): string[] {
+    if (typeof rawOutcomes !== 'string' || rawOutcomes.trim() === '') return [];
+
+    try {
+        const parsed = JSON.parse(rawOutcomes);
+        if (Array.isArray(parsed)) {
+            return parsed.map((item) => normalizeText(item)).filter(Boolean);
+        }
+    } catch {
+        // Fall back to plain text parsing below.
+    }
+
+    return rawOutcomes
+        .split(',')
+        .map((item) => normalizeText(item))
+        .filter(Boolean);
+}
+
+function resolveOutcomeLabel(outcome: string, marketInfo: Market | null, outcomeIndex: number): string {
+    if (outcome) return outcome;
+    const outcomes = parseMarketOutcomes(marketInfo?.outcomes);
+    if (outcomeIndex >= 0 && outcomeIndex < outcomes.length && outcomes[outcomeIndex]) {
+        return outcomes[outcomeIndex];
+    }
+    return 'Unknown Outcome';
 }
 
 export default class PolymarketService extends Tracker {
@@ -228,20 +259,17 @@ export default class PolymarketService extends Tracker {
     }
 
     private async processAlertCandidate(candidate: PolyAggregationRecord): Promise<void> {
+        const marketSlug = normalizeText(candidate.slug);
         const [marketInfo, walletInfo, walletStats] = await Promise.all([
-            this.api.getMarketBySlug(candidate.slug),
+            marketSlug ? this.api.getMarketBySlug(marketSlug) : Promise.resolve(null),
             this.api.getFirstTrade(candidate.wallet),
             this.api.getWalletStats(candidate.wallet)
         ]);
 
-        const title = candidate.title;
+        const title = normalizeText(candidate.title) || normalizeText(marketInfo?.question);
+        const outcomeLabel = resolveOutcomeLabel(normalizeText(candidate.outcome), marketInfo, candidate.outcomeIndex);
         const tags = marketInfo ? (marketInfo.tags || []).map((t) => t.label) : [];
-        const eventTicker =
-            marketInfo && marketInfo.events && marketInfo.events.length > 0
-                ? marketInfo.events[0].ticker
-                : marketInfo
-                  ? marketInfo.slug
-                  : 'unknown';
+        const eventTicker = marketInfo?.events?.[0]?.ticker || marketInfo?.slug || marketSlug || 'unknown';
         const category: MarketCategory = isEsportsMarket(title)
             ? 'esports'
             : isSportMarket(title)
@@ -321,7 +349,7 @@ export default class PolymarketService extends Tracker {
         );
         const result = this.formatAlertMessage({
             positionUSD: candidate.netUsd,
-            outcome: candidate.outcome,
+            outcome: outcomeLabel,
             marketTitle: title || 'Unknown Market',
             eventTicker: eventTicker,
             tags,
@@ -465,7 +493,7 @@ export default class PolymarketService extends Tracker {
         const lines = [
             `<b>${icon} ${escapeHtml(data.marketTitle)}</b>`,
             ``,
-            `<b>🏆 ${formatCurrency(data.positionUSD)}</b> on <b>${data.outcome}</b>`,
+            `<b>🏆 ${formatCurrency(data.positionUSD)}</b> on <b>${escapeHtml(data.outcome || 'Unknown Outcome')}</b>`,
             `<b>Trader:</b> ${data.nickname ? `#${escapeHtml(data.nickname)}` : `<code>${data.wallet}</code>`}`,
             `<b>Avg Price:</b> ${Math.round(data.avgPrice * 100)}¢`,
             `<b>First Trade:</b> ${formatDate(data.firstTradeDate)}`,
@@ -514,25 +542,37 @@ export default class PolymarketService extends Tracker {
     }
 
     private transformTrade(raw: Trade): PolyTradeInput | null {
+        const conditionId = normalizeText(raw.conditionId);
+        const proxyWallet = normalizeText(raw.proxyWallet);
+        if (!conditionId || !proxyWallet) return null;
+
         const MIN_TRADE_USD = 50;
         const price = raw.price;
         const size = raw.size;
         const usdAmount = size * price;
 
+        if (!Number.isFinite(price) || !Number.isFinite(size) || price <= 0 || size <= 0) return null;
         if (price >= config.polymarket.maxPriceFilter) return null;
         if (usdAmount < MIN_TRADE_USD) return null;
 
+        const timestamp = Number(raw.timestamp);
+        if (!Number.isFinite(timestamp) || timestamp <= 0) return null;
+
+        const outcome = normalizeText(raw.outcome);
+        const title = normalizeText(raw.title);
+        const slug = normalizeText(raw.slug) || normalizeText(raw.eventSlug);
+
         return {
-            proxyWallet: raw.proxyWallet,
-            conditionId: raw.conditionId,
+            proxyWallet,
+            conditionId,
             side: raw.side,
             price,
             usdAmount,
-            outcome: raw.outcome,
+            outcome,
             outcomeIndex: raw.outcomeIndex,
-            timestamp: new Date(raw.timestamp * 1000),
-            title: raw.title,
-            slug: raw.slug
+            timestamp: new Date(timestamp * 1000),
+            title,
+            slug
         };
     }
 
@@ -544,7 +584,13 @@ export default class PolymarketService extends Tracker {
         try {
             let screenshot: Buffer | null = null;
             if (config.puppeteer.screenshotEnabled) {
-                screenshot = await this.screenshoter.capture(`${config.polymarket.url}/profile/${candidate.wallet}`);
+                try {
+                    screenshot = await this.screenshoter.capture(
+                        `${config.polymarket.url}/profile/${candidate.wallet}`
+                    );
+                } catch (err) {
+                    this.logger.warn(`Screenshot failed for ${candidate.wallet}, sending alert without image: ${err}`);
+                }
             }
 
             for (let i = 0; i < this.channels.length; i++) {
