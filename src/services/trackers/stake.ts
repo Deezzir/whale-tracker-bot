@@ -1,5 +1,6 @@
 import { Browser, Page } from 'puppeteer';
 import { config } from '../../config';
+import Tg from '../telegram';
 import DBService, {
     BetOutcome,
     BetType,
@@ -9,9 +10,9 @@ import DBService, {
     StakeBetRecord,
     SwishBetOutcome
 } from '../db/stake';
-import { Tracker } from '../../common/tracker';
+import { ChatChannel, Tracker } from '../../common/tracker';
 import { InlineKeyboardMarkup } from 'telegraf/types';
-import { capitalize, formatCurrency, sleep, withTimeout } from '../../common/utils';
+import { capitalize, formatCurrency, sleep } from '../../common/utils';
 import puppeteer from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import ProxyService, { Proxy } from '../proxies';
@@ -164,13 +165,18 @@ puppeteer.use(StealthPlugin());
 
 export default class StakeService extends Tracker {
     private url = config.stake.url;
-    private proxy: Proxy | null = this.useProxy ? ProxyService.getRandomProxy() : null;
+    private proxy: Proxy | null = null;
 
     private page: Page | null = null;
     private browser: Browser | null = null;
     private betsBatch: Partial<StakeBetDocument>[] = [];
     private betsBatchInterval?: NodeJS.Timeout;
     private reconnecting = false;
+
+    public constructor(tg: Tg, channels: ChatChannel[], screenshotEnabled = false, useProxy = false) {
+        super(tg, channels, screenshotEnabled);
+        this.proxy = useProxy ? ProxyService.getRandomProxy() : null;
+    }
 
     async start(): Promise<void> {
         if (this.running) return;
@@ -197,9 +203,6 @@ export default class StakeService extends Tracker {
             this.clearBatchInterval();
             await this.disposePuppeteer();
             this.logger.error(`Error initializing Puppeteer: ${error}`);
-            for (const ch of this.channels) {
-                await this.tg.sendMessage(ch.chatId, 'Unable to start stake monitoring.').catch(() => {});
-            }
         }
     }
 
@@ -225,7 +228,6 @@ export default class StakeService extends Tracker {
             '--no-sandbox',
             '--disable-setuid-sandbox',
             '--disable-blink-features=AutomationControlled',
-            '--disable-dev-shm-usage',
             '--disable-gpu',
             '--disable-software-rasterizer',
             '--disable-background-networking',
@@ -319,17 +321,13 @@ export default class StakeService extends Tracker {
     }
 
     private async scanAndAlert(): Promise<void> {
-        const CANDIDATE_TIMEOUT_MS = 20_000;
         const candidates = await DBService.getStakeBetsToAlert(config.stake.minAlertBetUSD, config.stake.alertAgeMs);
 
         this.logger.info(`Found ${candidates.length} candidates needing alert`);
         for (const candidate of candidates) {
+            this.lastScanTimestamp = Date.now();
             try {
-                await withTimeout(
-                    this.processAlertCandidate(candidate),
-                    CANDIDATE_TIMEOUT_MS,
-                    `processAlertCandidate(${candidate.iid})`
-                );
+                await this.processAlertCandidate(candidate);
             } catch (error) {
                 this.logger.error(`Failed to alert bet ${candidate.iid}: ${error}`);
             }
@@ -346,11 +344,15 @@ export default class StakeService extends Tracker {
         const { msg, buttons } = result;
 
         let screenshot: Buffer | null = null;
-        if (config.puppeteer.screenshotEnabled) {
+        if (this.screenshotEnabled) {
             try {
                 screenshot = await this.screenshoter.capture(
                     `${this.url}/sports/home?iid=${candidate.iid}&modal=bet`,
-                    'div[data-modal-card="true"]'
+                    'div[data-modal-card="true"]',
+                    () => !!document.querySelector('div[data-modal-card="true"] div.content'),
+                    undefined,
+                    undefined,
+                    this.proxy
                 );
             } catch (err) {
                 this.logger.warn(`Screenshot failed for bet ${candidate.iid}, sending alert without image: ${err}`);

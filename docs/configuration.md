@@ -31,11 +31,13 @@ General/runtime:
 - `LOG_FILE_ENABLED`
 - `LOG_LEVEL`
 - `HEALTH_SERVER_PORT`
+- `RESTART_ON_UNHEALTHY` (default `false`; when `true`, the process exits with code `1` after the unhealthy alert so an orchestrator can restart it)
 
 DB/cache:
 
 - `MONGODB_URI`
 - `DB_NAME`
+- `REDIS_MODE`
 - `REDIS_URL`
 - `REDIS_PASSWORD`
 - `DB_AUTO_INDEX`
@@ -43,11 +45,13 @@ DB/cache:
 
 Hyperliquid:
 
+- `HS_EXCLUDE_DEXES`
 - `HS_MIN_NOTIONAL_USD`
 - `HS_MIN_SPOT_NOTIONAL_USD`
 - `HS_AGGREGATION_WINDOW_MS`
 - `HS_POS_CHANGE_ALERT_PERCENT`
 - `HS_POS_CHANGE_ALERT_USD`
+- `HS_SCREENSHOT_ENABLED`
 
 ### Alert Branch Thresholds
 
@@ -55,7 +59,7 @@ Hyperliquid:
 |----------|---------|-------------|
 | `HS_FRESH_WINDOW_MS` | `180000000` (50h) | Time window to consider a wallet "fresh" |
 | `HS_FRESH_MIN_USD` | `200000` | Min position for fresh wallet alert (other coins) |
-| `HS_FRESH_MAIN_COIN_MIN_USD` | `450000` | Min position for fresh wallet alert (main coins: BNB, XRP, DOGE, SOL, ZEC, HYPE) |
+| `HS_FRESH_MAIN_COIN_MIN_USD` | `450000` | Min position for fresh wallet alert (main coins: BTC, ETH, BNB, XRP, ZEC, DOGE, SOL, HYPE) |
 | `HS_WHALE_MIN_USD` | `300000` | Min position for whale activity alert (excl. BTC/ETH) |
 | `HS_BIG_WHALE_MIN_USD` | `1000000` | Min position for big whale alert (all coins) |
 | `HS_TWAP_BTC_ETH_MIN_USD` | `1000000` | Min accumulation for TWAP alert (BTC/ETH) |
@@ -72,19 +76,23 @@ Polymarket:
 - `POLY_POS_CHANGE_ALERT_PERCENT`
 - `POLY_POS_CHANGE_ALERT_USD`
 - `POLY_AGGREGATION_WINDOW_MS`
+- `POLY_SCREENSHOT_ENABLED`
 
 Stake:
 
 - `STAKE_MIN_BET_USD`
+- `STAKE_SCREENSHOT_ENABLED`
 
-Puppeteer:
+Puppeteer (browser runtime used by the shared screenshoter):
 
-- `PUPPETEER_SCREENSHOT_ENABLED`
 - `PUPPETEER_USER_DIR`
 - `PUPPETEER_HEADLESS`
+- `PUPPETEER_CONCURRENT_CAPTURES` (default `false`: captures are serialized through a singleton FIFO queue; set to `true` to allow concurrent captures across trackers)
 - `PUPPETEER_PROXIES_PATH`
 - `PUPPETEER_PROXIES`
-- `PUPPETEER_EXECUTABLE_PATH` (read directly by tracker/screenshoter services)
+- `PUPPETEER_EXECUTABLE_PATH` (read directly by the screenshoter service)
+
+Per-tracker screenshot enablement is controlled by `HS_SCREENSHOT_ENABLED`, `STAKE_SCREENSHOT_ENABLED`, `POLY_SCREENSHOT_ENABLED`, and `OI_SCREENSHOT_ENABLED`. The screenshoter itself is a process-wide singleton shared by all trackers.
 
 OpenRouter:
 
@@ -95,16 +103,18 @@ CoinGlass OI Anomaly Tracker:
 
 - `COINGLASS_EXCHANGES` (default: `Gate,Bybit,Binance,OKX,Kraken`; do not include `Hyperliquid` or `Aster`, which are managed by direct sources)
 - `COINGLASS_REFRESH_INTERVAL_MS` (default: `3600000` / 1h)
-- `COINGLASS_BLACKLIST` (default: empty — comma-separated tokens to exclude from detection)
-- `COINGLASS_BACKFILL_CONCURRENCY` (default: `5` — parallel backfill concurrency; `COINGLASS_WARMUP_CONCURRENCY` accepted as fallback)
-- `COINGLASS_GAP_THRESHOLD_INTERVALS` (default: `3` — missed intervals before pair enters DEGRADED_DATA)
-- `OI_HYPERLIQUID_INTERVAL_MS` (default: `900000` / 15min — Hyperliquid OI collection interval)
+- `COINGLASS_WHITELIST` (default: empty — comma-separated tokens; when set, only listed tokens are tracked)
+- `COINGLASS_GAP_THRESHOLD_INTERVALS` (default: `3` — missed intervals before a pair enters DEGRADED_DATA)
+- `OI_SCREENSHOT_ENABLED` (default: `true`)
+
+The Hyperliquid OI collection interval (15 min) and the Coinglass scan sleep (5 min) are hardcoded in `config.oi` and are not environment-configurable.
 
 ### CoinGlass Detection Parameters (hardcoded in config.ts)
 
 | Parameter | Value | Description |
 |-----------|-------|-------------|
-| Scan sleep | 5 min | Sleep between scan cycles (actual cycle time is longer) |
+| Coinglass scan sleep | 5 min | Sleep between Coinglass scan cycles (hardcoded) |
+| Hyperliquid scan interval | 15 min | Direct Hyperliquid OI collection cycle (hardcoded) |
 | Candle interval | 30 min | Coinglass OI candle granularity |
 | Warmup candles | 96 (48h) | Ring buffer size and minimum candles before alerting |
 | EWMA α | ~0.02062 | Decay factor (2 / (warmupCandles + 1)) |

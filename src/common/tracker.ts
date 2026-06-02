@@ -11,7 +11,8 @@ export interface ChatChannel {
 
 export abstract class Tracker extends Runner {
     protected screenshoter: ScreenshotService;
-    protected useProxy: boolean;
+    protected screenshotEnabled = false;
+
     protected tg: Tg;
     protected channels: ChatChannel[];
 
@@ -25,12 +26,12 @@ export abstract class Tracker extends Runner {
     private restartCount = 0;
     private scanStallCount = 0;
 
-    constructor(tg: Tg, channels: ChatChannel[], useProxy = false, useProxyForScreenshots = false) {
+    constructor(tg: Tg, channels: ChatChannel[], screenshotEnabled = false) {
         super();
         this.tg = tg;
         this.channels = channels;
-        this.useProxy = useProxy;
-        this.screenshoter = new ScreenshotService(useProxyForScreenshots);
+        this.screenshotEnabled = screenshotEnabled;
+        this.screenshoter = ScreenshotService.getInstance();
     }
 
     abstract start(): Promise<void>;

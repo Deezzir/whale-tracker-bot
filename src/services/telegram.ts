@@ -187,8 +187,9 @@ export default class TelegramService {
     }
 
     public async sendRestartUnhealthyAlert(error?: string): Promise<void> {
-        let message = `<b>🛑 Restarting bot, some services are unhealthy.</b>`;
+        let message = `<b>🛑 Some services are unhealthy.</b>`;
         if (error) message += `\n\n${error}`;
+        if (config.restartOnUnhealthy) message += `\n\nThe bot will attempt to restart.`;
         await this.sendMessage(config.telegram.ownerUserID, message);
     }
 

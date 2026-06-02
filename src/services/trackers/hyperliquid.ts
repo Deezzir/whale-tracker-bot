@@ -2,7 +2,7 @@ import { config } from '../../config';
 import { Markup } from 'telegraf';
 import { InlineKeyboardMarkup } from 'telegraf/types';
 import { ChatChannel, Tracker } from '../../common/tracker';
-import { escapeHtml, formatCurrency, formatTimeAgo, sleep, withTimeout } from '../../common/utils';
+import { escapeHtml, formatCurrency, formatTimeAgo, sleep } from '../../common/utils';
 import Tg from '../telegram';
 import DBService, {
     HyperAggregationRecord,
@@ -149,15 +149,15 @@ export default class HyperliquidService extends Tracker {
         bigWhaleChannels: ChatChannel[],
         twapChannels: ChatChannel[],
         trackChannels: ChatChannel[],
-        useProxy = false,
-        useProxyForScreenshots = false
+        screenshotEnabled = false
     ) {
-        super(tg, [], useProxy, useProxyForScreenshots);
+        super(tg, []);
         this.bigWhaleChannels = bigWhaleChannels;
         this.freshWalletChannels = freshWalletChannels;
         this.whaleActivityChannels = whaleActivityChannels;
         this.twapChannels = twapChannels;
         this.trackChannels = trackChannels;
+        this.screenshotEnabled = screenshotEnabled;
     }
 
     async start(): Promise<void> {
@@ -405,8 +405,6 @@ export default class HyperliquidService extends Tracker {
     }
 
     private async scanAndAlert(): Promise<void> {
-        const CANDIDATE_TIMEOUT_MS = 20_000;
-
         if (this.affectedKeys.size === 0) {
             this.logger.info('No affected positions to scan');
             this.lastScanTimestamp = Date.now();
@@ -442,31 +440,24 @@ export default class HyperliquidService extends Tracker {
         this.logger.info(
             `Found ${candidates.length} candidates needing alert (${perpCandidates.length} perp, ${spotCandidates.length} spot)`
         );
+        this.lastScanTimestamp = Date.now();
         if (candidates.length === 0) return;
 
         const uniqueWallets = [...new Set(candidates.map((c) => c.wallet))];
         const walletData = await this.prefetchWalletData(uniqueWallets);
 
         for (const candidate of candidates) {
+            this.lastScanTimestamp = Date.now();
             try {
                 const data = walletData.get(candidate.wallet);
                 if (!data) {
                     this.logger.debug(`No prefetched data for wallet ${candidate.wallet}, skipping`);
                     continue;
                 }
-                const label = `processAlertCandidate(${candidate.wallet}/${candidate.coin})`;
                 if (isSpot(candidate.direction)) {
-                    await withTimeout(
-                        this.processSpotAlertCandidate(candidate, data.portfolio, data.state),
-                        CANDIDATE_TIMEOUT_MS,
-                        label
-                    );
+                    await this.processSpotAlertCandidate(candidate, data.portfolio, data.state);
                 } else {
-                    await withTimeout(
-                        this.processAlertCandidate(candidate, data.portfolio, data.state),
-                        CANDIDATE_TIMEOUT_MS,
-                        label
-                    );
+                    await this.processAlertCandidate(candidate, data.portfolio, data.state);
                 }
             } catch (error) {
                 this.logger.error(
@@ -1049,7 +1040,7 @@ export default class HyperliquidService extends Tracker {
         }
 
         let screenshot: Buffer | null = null;
-        if (config.puppeteer.screenshotEnabled) {
+        if (this.screenshotEnabled) {
             try {
                 screenshot = await this.screenshoter.capture(
                     `${this.hypurrscanExplorer}/address/${candidate.wallet}#perps`,
@@ -1279,7 +1270,7 @@ export default class HyperliquidService extends Tracker {
         const { msg, buttons } = result;
 
         let screenshot: Buffer | null = null;
-        if (config.puppeteer.screenshotEnabled) {
+        if (this.screenshotEnabled) {
             try {
                 screenshot = await this.screenshoter.capture(
                     `${this.hypurrscanExplorer}/address/${candidate.wallet}#spot`,

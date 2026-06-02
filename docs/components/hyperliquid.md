@@ -37,7 +37,6 @@ Normalization details:
 Candidates are classified into one of four alert branches:
 
 1. **Fresh Wallet** — wallet first seen < 50h ago (configurable via `HS_FRESH_WINDOW_MS`). Tiered thresholds:
-   - BTC/ETH: >= $2M (`HS_FRESH_BTC_ETH_MIN_USD`)
    - Main coins (BTC, ETH, BNB, XRP, ZEC, DOGE, SOL, HYPE): >= $450K (`HS_FRESH_MAIN_COIN_MIN_USD`)
    - Other coins: >= $200K (`HS_FRESH_MIN_USD`)
 

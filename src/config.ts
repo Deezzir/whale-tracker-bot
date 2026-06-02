@@ -21,6 +21,49 @@ export enum Environment {
 const ASSETS_PATH = './resources';
 const runtimeEnv = optionalEnv('NODE_ENV', 'development') as Environment;
 
+function getRedisConfig() {
+    const getMode = () => {
+        const mode = optionalEnv('REDIS_MODE', 'standalone').trim().toLowerCase();
+        if (mode === 'sentinel') return 'sentinel';
+        return 'standalone';
+    };
+
+    const parseSentinelHost = (url: string) => {
+        const match = url.match(/^redis:\/\/([^:]+):(\d+):(.+)$/);
+        if (!match) {
+            throw new Error(
+                `Invalid REDIS_URL format for sentinel mode. Expected format: redis://sentinelHost:sentinelPort:sentinelName`
+            );
+        }
+        return {
+            host: match[1],
+            port: parseInt(match[2], 10),
+            name: match[3]
+        };
+    };
+
+    const mode = getMode();
+    const url = optionalEnv('REDIS_URL', 'redis://localhost:6379') as string;
+    const password = optionalEnv('REDIS_PASSWORD', '') as string;
+
+    if (mode === 'sentinel') {
+        const sentinelHost = parseSentinelHost(url);
+        return {
+            mode,
+            sentinel: {
+                ...sentinelHost,
+                replicaPoolSize: parseInt(optionalEnv('REDIS_SENTINEL_REPLICA_POOL_SIZE', '1'), 10)
+            },
+            password: password
+        };
+    }
+    return {
+        mode,
+        url: url,
+        password: password
+    };
+}
+
 function parseCoinglassExchanges(value: string): string[] {
     const EXTERNALLY_MANAGED_OI_EXCHANGES = new Set(['hyperliquid', 'aster']);
     const exchanges = value.split(',').map((e) => e.trim());
@@ -43,6 +86,7 @@ export const config = {
     env: runtimeEnv,
     logFileEnabled: optionalEnv('LOG_FILE_ENABLED', 'false') === 'true',
     healthServerPort: parseInt(optionalEnv('HEALTH_SERVER_PORT', '9988'), 10),
+    restartOnUnhealthy: optionalEnv('RESTART_ON_UNHEALTHY', 'false') === 'true',
     logLevel: optionalEnv('LOG_LEVEL', 'INFO'),
     trackers: process.env['ENABLED_TRACKERS'] ? process.env['ENABLED_TRACKERS'].split(',').map((t) => t.trim()) : [],
     telegram: {
@@ -62,7 +106,7 @@ export const config = {
         intervalMs: 30 * 1000, // 30 seconds
         cleanupIntervalMs: 60 * 60 * 1000, // 1 hour
         noDataTimeoutMs: 5 * 60 * 1000, // 5 minutes
-        scanStallTimeoutMs: 5 * 60 * 1000 // 5 minutes
+        scanStallTimeoutMs: 10 * 60 * 1000 // 10 minutes
     },
     hyperliquid: {
         excludeDexes: process.env['HS_EXCLUDE_DEXES']
@@ -73,20 +117,21 @@ export const config = {
         aggregationWindowMs: parseInt(optionalEnv('HS_AGGREGATION_WINDOW_MS', String(3 * 24 * 60 * 60 * 1000)), 10),
         minimalGrowthPercent: parseFloat(optionalEnv('HS_POS_CHANGE_ALERT_PERCENT', '9')),
         minimalGrowthUSD: parseFloat(optionalEnv('HS_POS_CHANGE_ALERT_USD', '50000')),
-        mainCoins: ['BTC', 'ETH', 'BNB', 'XRP', 'ZEC', 'DOGE', 'SOL', 'HYPE'] as string[],
         freshMinUSD: parseFloat(optionalEnv('HS_FRESH_MIN_USD', '200000')),
         freshMainCoinMinUSD: parseFloat(optionalEnv('HS_FRESH_MAIN_COIN_MIN_USD', '450000')),
         whaleMinUSD: parseFloat(optionalEnv('HS_WHALE_MIN_USD', '300000')),
         bigWhaleMinUSD: parseFloat(optionalEnv('HS_BIG_WHALE_MIN_USD', '1000000')),
         twapBtcEthMinUSD: parseFloat(optionalEnv('HS_TWAP_BTC_ETH_MIN_USD', '1000000')),
         twapOtherMinUSD: parseFloat(optionalEnv('HS_TWAP_OTHER_MIN_USD', '300000')),
+        freshWindowMs: parseInt(optionalEnv('HS_FRESH_WINDOW_MS', String(50 * 60 * 60 * 1000)), 10),
+        screenshotEnabled: optionalEnv('HS_SCREENSHOT_ENABLED', 'true') === 'true',
+        mainCoins: ['BTC', 'ETH', 'BNB', 'XRP', 'ZEC', 'DOGE', 'SOL', 'HYPE'] as string[],
         wss: 'wss://api.hyperliquid.xyz/ws',
         api: 'https://api.hyperliquid.xyz/info',
         hypurrscanExplorer: 'https://hypurrscan.io',
         hyperdashExplorer: 'https://hyperdash.com',
-        minTradeNotionalUSD: parseFloat(optionalEnv('HS_MIN_TRADE_NOTIONAL_USD', '500')),
         batchSize: 1000,
-        freshWindowMs: parseInt(optionalEnv('HS_FRESH_WINDOW_MS', String(50 * 60 * 60 * 1000)), 10),
+        minTradeNotionalUSD: 500,
         batchFlushIntervalMs: 60 * 1000, // 1 minute
         cleanupTTLms: 5 * 24 * 60 * 60 * 1000, // 5 days
         trackedCheckIntervalMs: 30 * 60 * 1000, // 30 minutes
@@ -101,6 +146,7 @@ export const config = {
     },
     stake: {
         minAlertBetUSD: parseFloat(optionalEnv('STAKE_MIN_BET_USD', '10000')),
+        screenshotEnabled: optionalEnv('STAKE_SCREENSHOT_ENABLED', 'true') === 'true',
         url: 'https://stake.com',
         api: 'https://stake.com/_api/graphql',
         wss: 'wss://stake.com/_api/websockets',
@@ -116,6 +162,7 @@ export const config = {
         minimalGrowthPercent: parseFloat(optionalEnv('POLY_POS_CHANGE_ALERT_PERCENT', '20')),
         minimalGrowthUSD: parseFloat(optionalEnv('POLY_POS_CHANGE_ALERT_USD', '9000')),
         aggregationWindowMs: parseInt(optionalEnv('POLY_AGGREGATION_WINDOW_MS', String(7 * 24 * 60 * 60 * 1000)), 10),
+        screenshotEnabled: optionalEnv('POLY_SCREENSHOT_ENABLED', 'true') === 'true',
         url: 'https://polymarket.com',
         wss: 'wss://ws-live-data.polymarket.com',
         dataApi: 'https://data-api.polymarket.com',
@@ -137,15 +184,14 @@ export const config = {
     db: {
         mongodbURI: optionalEnv('MONGODB_URI', 'mongodb://root:example@localhost:27017') as string,
         dbName: optionalEnv('DB_NAME', 'whale-tracker-bot') as string,
-        redisURL: optionalEnv('REDIS_URL', 'redis://localhost:6379') as string,
-        redisPassword: optionalEnv('REDIS_PASSWORD', '') as string,
-        autoIndex: optionalEnv('DB_AUTO_INDEX', runtimeEnv !== Environment.Production ? 'true' : 'false') === 'true',
-        ensureIndexesOnStart: optionalEnv('DB_ENSURE_INDEXES_ON_START', 'true') === 'true'
+        autoIndex: runtimeEnv !== Environment.Production ? true : false,
+        ensureIndexesOnStart: runtimeEnv !== Environment.Production ? true : false
     },
+    redis: getRedisConfig(),
     puppeteer: {
-        screenshotEnabled: optionalEnv('PUPPETEER_SCREENSHOT_ENABLED', 'true') === 'true',
         userDir: optionalEnv('PUPPETEER_USER_DIR', '') as string,
         headless: optionalEnv('PUPPETEER_HEADLESS', 'true') === 'true',
+        concurrentCaptures: optionalEnv('PUPPETEER_CONCURRENT_CAPTURES', 'false') === 'true',
         proxiesPath: optionalEnv('PUPPETEER_PROXIES_PATH', `${ASSETS_PATH}/ports.txt`) as string,
         proxies: optionalEnv('PUPPETEER_PROXIES', '')
             .split(',')
@@ -200,7 +246,7 @@ export const config = {
             : [],
         refreshIntervalMs: parseInt(optionalEnv('COINGLASS_REFRESH_INTERVAL_MS', '3600000'), 10),
         coinglassGapThresholdIntervals: parseInt(optionalEnv('COINGLASS_GAP_THRESHOLD_INTERVALS', '3'), 10),
-
+        screenshotEnabled: optionalEnv('OI_SCREENSHOT_ENABLED', 'true') === 'true',
         cooldownSeconds: 21600, // 6 hours
         warmupCandles: 96, // 48 hours of 30m candles
         ewmaAlpha: 2 / (96 + 1), // ~0.02062

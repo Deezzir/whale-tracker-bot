@@ -39,7 +39,10 @@ Unhealthy conditions come from tracker watchdog counters in `src/common/tracker.
 - no-data watchdog breaches
 - scan-stall watchdog breaches
 
-When unhealthy is detected, callback in `src/index.ts` sends owner alert and triggers shutdown.
+When unhealthy is detected, the callback in `src/index.ts` always sends an owner alert. Whether the process then exits is controlled by `RESTART_ON_UNHEALTHY`:
+
+- `RESTART_ON_UNHEALTHY=true` — the bot shuts down with exit code `1` after alerting (so an orchestrator can restart it).
+- `RESTART_ON_UNHEALTHY=false` (default) — the bot only alerts and keeps running.
 
 ## Logs and Observability
 

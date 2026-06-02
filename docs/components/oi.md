@@ -47,8 +47,8 @@ Alerts include an inline button linking to the exchange-specific OI chart on Coi
 
 ## Token Filtering
 
-- **Blacklist** (`COINGLASS_BLACKLIST`): comma-separated tokens excluded from in-memory tracking
-- Full universe is persisted to MongoDB regardless of blacklist (for future expansion)
+- **Whitelist** (`COINGLASS_WHITELIST`): comma-separated tokens to track. When empty (default), all tokens from the configured exchanges are tracked.
+- The full universe is persisted to MongoDB regardless of the whitelist (for future expansion).
 
 ## State Management
 
@@ -102,13 +102,13 @@ Hyperliquid pairs are collected directly from the Hyperliquid API rather than th
 
 ### Source Routing
 
-- **Hyperliquid pairs**: collected via direct Hyperliquid API (`OI_HYPERLIQUID_DIRECT_ENABLED=true`)
+- **Hyperliquid pairs**: always collected via the direct Hyperliquid API
 - **All other exchanges**: collected via CoinGlass API as before
 - `COINGLASS_EXCHANGES` must **not** include `Hyperliquid` or `Aster` — a config guard rejects startup if they are present
 
 ### Collection Interval
 
-Hyperliquid direct source runs on a **15-minute** cycle (`OI_HYPERLIQUID_INTERVAL_MS=900000`), independent of the CoinGlass 30-minute scan cycle.
+Hyperliquid direct source runs on a **15-minute** cycle (hardcoded in `config.oi.hyperliquidIntervalMs`), independent of the CoinGlass 5-minute scan cycle.
 
 ### Warmup
 

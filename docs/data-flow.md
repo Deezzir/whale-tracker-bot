@@ -86,6 +86,29 @@ Code owner: `src/services/trackers/stake.ts`
 - Alerting:
   - Sends one alert per bet, then marks alert timestamp in DB.
 
+## OI (CoinGlass + Hyperliquid Direct) Flow
+
+Code owner: `src/services/trackers/oi.ts`
+
+- Ingest:
+  - Coinglass scan loop (5 min sleep) polls per-exchange OI history for the configured exchanges.
+  - Hyperliquid direct scan loop (15 min) pulls OI from the Hyperliquid API.
+  - Token universe refresh (1h) reconciles tracked pairs.
+- Normalization:
+  - Each cycle produces an `OIObservation` per `(exchange, instrumentId, intervalStart)`.
+  - Observations are upserted into MongoDB so restarts can warm up locally.
+- Detection:
+  - Per-pair statistical state (EWMA / MAD-based z / CUSUM) is updated incrementally.
+  - Global quality gates (min OI, min ΔOI USD/%) apply before any trigger.
+  - Three trigger channels: fast spike (z), slow accumulation (Σz), sustained build (CUSUM).
+- State management:
+  - Hot-path statistics live in-memory.
+  - Cooldowns live in Redis (`oi:cooldown:{exchange}:{instrumentId}`, 6h TTL).
+  - Gaps (>= `COINGLASS_GAP_THRESHOLD_INTERVALS` missed intervals) move a pair to `DEGRADED_DATA` and suppress alerts until re-warmup.
+- Alerting:
+  - Each alert routes to the dedicated OI Telegram channel with an exchange-specific chart button.
+  - Alert history is persisted as `OIAlertRecord` for audit and dedup.
+
 ## State and Storage
 
 - MongoDB stores:
@@ -126,3 +149,4 @@ Code owner: `src/services/trackers/stake.ts`
 - `docs/components/hyperliquid.md`
 - `docs/components/polymarket.md`
 - `docs/components/stake.md`
+- `docs/components/oi.md`

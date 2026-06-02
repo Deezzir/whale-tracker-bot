@@ -19,7 +19,7 @@ Boot order in `src/index.ts`:
 1. `connectDB()`
 2. `connectRedis()`
 3. `telegram.start(...)`
-4. Start tracker services (`HyperliquidService`, `StakeService`, `PolymarketService`)
+4. Start enabled tracker services (`HyperliquidService`, `StakeService`, `PolymarketService`, `CoinglassService` / OI — selected via `ENABLED_TRACKERS`)
 5. Start health server (`/healthz`)
 
 Shutdown path handles `SIGINT` and `SIGTERM` and stops health, Telegram, DB/Redis, and trackers.
@@ -48,14 +48,19 @@ Shutdown path handles `SIGINT` and `SIGTERM` and stops health, Telegram, DB/Redi
   - Uses Puppeteer/browser-side websocket logic for Stake bet stream ingestion.
   - Converts bet currencies to USD and sends high-value bet alerts.
 
+- `src/services/trackers/oi.ts`
+  - Polls Coinglass per-exchange OI history and collects Hyperliquid OI directly.
+  - Runs EWMA / robust z-score / CUSUM detection and sends OI anomaly alerts.
+
 ### Persistence
 
 - MongoDB services:
   - `src/services/db/hyperliquid.ts`
   - `src/services/db/polymarket.ts`
   - `src/services/db/stake.ts`
+  - `src/services/db/oi.ts`
 - Redis client: `src/services/redis.ts`
-  - Caches API data and runtime values (for example stake currency rates).
+  - Caches API data and runtime values (for example stake currency rates and OI cooldown keys).
 
 ### Delivery and Control Plane
 
@@ -68,6 +73,8 @@ Shutdown path handles `SIGINT` and `SIGTERM` and stops health, Telegram, DB/Redi
 
 - Hyperliquid APIs: `src/services/api/hyperliquid.ts`
 - Polymarket APIs: `src/services/api/polymarket.ts`
+- CoinGlass API: `src/services/api/coinglass.ts`
+- Aster API: `src/services/api/aster.ts`
 - Stake GraphQL + websocket flow handled in `src/services/trackers/stake.ts`
 - Optional OpenRouter client: `src/services/api/openrouter.ts`
 
@@ -78,7 +85,7 @@ Health is not only process liveness.
 - `Tracker.watchDog(...)` tracks "no data" conditions.
 - `Tracker.scanWatchDog(...)` tracks stalled scan loops.
 - `HealthService` in `src/healthz.ts` marks unhealthy when counters cross thresholds.
-- On unhealthy status, `src/index.ts` sends owner alert and triggers shutdown.
+- On unhealthy status, `src/index.ts` always sends an owner alert and optionally triggers shutdown when `RESTART_ON_UNHEALTHY=true`.
 
 ## Known Architectural Footguns
 

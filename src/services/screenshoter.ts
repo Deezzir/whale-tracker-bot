@@ -2,9 +2,9 @@ import puppeteer from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import Logger from '../common/logger';
 import { Browser, Page } from 'puppeteer';
-import ProxyService, { Proxy } from './proxies';
-import { sleep } from 'bun';
+import { Proxy } from './proxies';
 import { retry } from '../common/utils';
+import { Mutex } from '../common/mutex';
 import { config } from '../config';
 
 const logger = new Logger('Screenshoter');
@@ -12,30 +12,39 @@ puppeteer.use(StealthPlugin());
 
 export default class ScreenshotService {
     private browser: Browser | null = null;
-    private proxy: Proxy | null = null;
-    private activeCaptures = 0;
-    private idleCloseTimer: NodeJS.Timeout | null = null;
+    private startPromise: Promise<void> | null = null;
+    private refCount = 0;
+    private readonly captureQueue = new Mutex();
 
-    private static readonly IDLE_BROWSER_CLOSE_MS = 5 * 60 * 1000;
+    private static readonly CAPTURE_TIMEOUT_MS = 35_000;
+    private static readonly NAVIGATION_TIMEOUT_MS = 20_000;
+    private static readonly SELECTOR_TIMEOUT_MS = 10_000;
 
-    constructor(useProxy: boolean) {
-        if (useProxy) this.proxy = ProxyService.getRandomProxy();
+    private static instance: ScreenshotService | null = null;
+
+    static getInstance(): ScreenshotService {
+        if (!ScreenshotService.instance) {
+            ScreenshotService.instance = new ScreenshotService();
+        }
+        ScreenshotService.instance.refCount++;
+        return ScreenshotService.instance;
     }
 
     async start(): Promise<void> {
-        if (this.browser?.connected) {
-            this.clearIdleCloseTimer();
-            return;
-        }
-
+        if (this.browser?.connected) return;
+        if (this.startPromise) return this.startPromise;
         this.browser = null;
-        this.clearIdleCloseTimer();
+        this.startPromise = this.launchBrowser().finally(() => {
+            this.startPromise = null;
+        });
+        return this.startPromise;
+    }
 
+    private async launchBrowser(): Promise<void> {
         const args = [
             '--no-sandbox',
             '--disable-setuid-sandbox',
             '--disable-blink-features=AutomationControlled',
-            '--disable-dev-shm-usage',
             '--disable-gpu',
             '--disable-software-rasterizer',
             '--disable-background-networking',
@@ -48,7 +57,6 @@ export default class ScreenshotService {
             '--no-zygote'
         ];
         if (!config.puppeteer.headless) args.push('--display=:0');
-        if (this.proxy) args.push(`--proxy-server=http://${this.proxy.host}:${this.proxy.port}`);
 
         this.browser = await puppeteer.launch({
             headless: config.puppeteer.headless,
@@ -60,13 +68,16 @@ export default class ScreenshotService {
             this.browser = null;
         });
 
-        logger.info(
-            `Puppeteer initialized with${this.proxy ? ` proxy ${this.proxy.host}:${this.proxy.port}` : 'out proxy'}`
-        );
+        logger.info('Puppeteer initialized');
     }
 
     async stop(): Promise<void> {
-        this.clearIdleCloseTimer();
+        if (this.refCount > 0) this.refCount--;
+        if (this.refCount > 0) return;
+        await this.shutdown();
+    }
+
+    private async shutdown(): Promise<void> {
         const browser = this.browser;
         this.browser = null;
         if (!browser) return;
@@ -82,14 +93,18 @@ export default class ScreenshotService {
         selector?: string,
         waitFn?: () => boolean,
         prehook?: (page: Page) => Promise<void>,
-        viewport = { width: 1280, height: 1400 }
+        viewport = { width: 1280, height: 1400 },
+        proxy?: Proxy | null
     ): Promise<Buffer | null> {
-        const MAX_RETRIES = 2;
-        return retry(
-            () => this.captureInternal(url, selector, waitFn, prehook, viewport),
-            { attempts: MAX_RETRIES },
-            logger
-        );
+        const MAX_RETRIES = 1;
+        const run = () =>
+            retry(
+                () => this.captureInternal(url, selector, waitFn, prehook, viewport, proxy),
+                { attempts: MAX_RETRIES },
+                logger
+            );
+        if (config.puppeteer.concurrentCaptures) return run();
+        return this.captureQueue.runExclusive(run);
     }
 
     private async captureInternal(
@@ -97,22 +112,37 @@ export default class ScreenshotService {
         selector?: string,
         waitFn?: () => boolean,
         prehook?: (page: Page) => Promise<void>,
-        viewport?: { width: number; height: number }
+        viewport?: { width: number; height: number },
+        proxy?: Proxy | null
     ): Promise<Buffer | null> {
         let page: Page | null = null;
-        this.activeCaptures++;
-        this.clearIdleCloseTimer();
+        let context: Awaited<ReturnType<Browser['createBrowserContext']>> | null = null;
+        let captureTimer: NodeJS.Timeout | null = null;
+        let captureTimedOut = false;
 
         try {
             if (!this.browser || !this.browser.connected) await this.start();
 
-            page = await this.browser!.newPage();
+            if (proxy) {
+                context = await this.browser!.createBrowserContext({
+                    proxyServer: `http://${proxy.host}:${proxy.port}`
+                });
+                page = await context.newPage();
+            } else {
+                page = await this.browser!.newPage();
+            }
             if (!page) throw new Error('Failed to create a new page');
 
-            if (this.proxy)
+            captureTimer = setTimeout(() => {
+                captureTimedOut = true;
+                void page?.close().catch(() => {});
+            }, ScreenshotService.CAPTURE_TIMEOUT_MS);
+            captureTimer.unref?.();
+
+            if (proxy)
                 await page.authenticate({
-                    username: this.proxy.username,
-                    password: this.proxy.password
+                    username: proxy.username,
+                    password: proxy.password
                 });
             page.on('framenavigated', async (frame) => {
                 if (
@@ -129,21 +159,19 @@ export default class ScreenshotService {
                 Object.defineProperty(navigator, 'webdriver', { get: () => false });
             });
 
-            await page.goto(url, { waitUntil: 'networkidle2', timeout: 15_000 });
-            await page.waitForSelector('body', { timeout: 5_000 });
-            await sleep(2000);
+            await page.goto(url, { waitUntil: 'domcontentloaded', timeout: ScreenshotService.NAVIGATION_TIMEOUT_MS });
+            await page.waitForSelector('body', { timeout: ScreenshotService.SELECTOR_TIMEOUT_MS });
 
             if (prehook) await prehook(page);
 
-            if (waitFn) {
-                await page.waitForFunction(waitFn, { timeout: 15_000, polling: 1000 });
-                await sleep(1000);
-            }
+            if (waitFn)
+                await page.waitForFunction(waitFn, { timeout: ScreenshotService.NAVIGATION_TIMEOUT_MS, polling: 1000 });
 
             if (selector) {
-                const element = await page.waitForSelector(selector, { timeout: 10_000 });
+                const element = await page.waitForSelector(selector, {
+                    timeout: ScreenshotService.SELECTOR_TIMEOUT_MS
+                });
                 if (!element) throw new Error(`Element not found: ${selector}`);
-                await sleep(1000);
                 const screenshot = await element.screenshot({ type: 'png' });
                 return Buffer.from(screenshot);
             }
@@ -151,28 +179,19 @@ export default class ScreenshotService {
             const screenshot = await page.screenshot({ type: 'png' });
             return Buffer.from(screenshot);
         } catch (err) {
+            if (captureTimedOut) {
+                const timeoutError = new Error(
+                    `Screenshot capture timed out after ${ScreenshotService.CAPTURE_TIMEOUT_MS}ms`
+                );
+                logger.error(`Screenshot failed for ${url}: ${timeoutError}`);
+                throw timeoutError;
+            }
             logger.error(`Screenshot failed for ${url}: ${err}`);
             throw err;
         } finally {
+            if (captureTimer) clearTimeout(captureTimer);
             if (page) await page.close().catch(() => {});
-            this.activeCaptures = Math.max(0, this.activeCaptures - 1);
-            this.scheduleIdleClose();
+            if (context) await context.close().catch(() => {});
         }
-    }
-
-    private clearIdleCloseTimer(): void {
-        if (!this.idleCloseTimer) return;
-        clearTimeout(this.idleCloseTimer);
-        this.idleCloseTimer = null;
-    }
-
-    private scheduleIdleClose(): void {
-        if (this.activeCaptures > 0 || !this.browser?.connected) return;
-
-        this.clearIdleCloseTimer();
-        this.idleCloseTimer = setTimeout(() => {
-            void this.stop();
-        }, ScreenshotService.IDLE_BROWSER_CLOSE_MS);
-        this.idleCloseTimer.unref?.();
     }
 }

@@ -43,18 +43,38 @@ function getEnabledTrackers(): Tracker[] {
                             [{ chatId: config.telegram.hsWhaleActivityChatID }],
                             [{ chatId: config.telegram.hsBigWhaleChatID }],
                             [{ chatId: config.telegram.hsTwapChatID }],
-                            [{ chatId: config.telegram.hsTrackChatID }]
+                            [{ chatId: config.telegram.hsTrackChatID }],
+                            config.hyperliquid.screenshotEnabled
                         )
                     );
                     break;
                 case StakeService.name:
-                    services.push(new StakeService(telegram, [{ chatId: config.telegram.stakeChatID }], false, true));
+                    services.push(
+                        new StakeService(
+                            telegram,
+                            [{ chatId: config.telegram.stakeChatID }],
+                            config.stake.screenshotEnabled,
+                            false
+                        )
+                    );
                     break;
                 case PolymarketService.name:
-                    services.push(new PolymarketService(telegram, [{ chatId: config.telegram.polyChatID }]));
+                    services.push(
+                        new PolymarketService(
+                            telegram,
+                            [{ chatId: config.telegram.polyChatID }],
+                            config.polymarket.screenshotEnabled
+                        )
+                    );
                     break;
                 case OIService.name:
-                    services.push(new OIService(telegram, [{ chatId: config.telegram.coinglassChatId }]));
+                    services.push(
+                        new OIService(
+                            telegram,
+                            [{ chatId: config.telegram.coinglassChatId }],
+                            config.oi.screenshotEnabled
+                        )
+                    );
                     break;
                 default:
                     logger.warn(`Unknown tracker name: ${trackerConfig.fullName}`);
@@ -203,7 +223,7 @@ async function shutdown(code: number): Promise<void> {
     try {
         healthServer.stop();
         telegram.stop();
-        await Promise.allSettled([closeDB(), closeRedis(), stopMonitoringServices()]);
+        await Promise.allSettled([stopMonitoringServices(), closeDB(), closeRedis()]);
     } catch (error) {
         logger.error(`Error during shutdown: ${error}`);
     }
@@ -230,7 +250,10 @@ async function main(): Promise<void> {
         telegram
             .sendRestartUnhealthyAlert(error)
             .catch((err) => logger.error(`Failed to send unhealthy alert: ${err}`));
-        shutdown(1);
+        if (config.restartOnUnhealthy) {
+            logger.info('Restarting services due to unhealthy status...');
+            shutdown(1);
+        }
     });
 
     process.once('SIGINT', () => void shutdown(0));

@@ -1,18 +1,37 @@
-import { createClient } from 'redis';
+import { createClient, createSentinel } from 'redis';
 import { config } from '../config';
 import Logger from '../common/logger';
 
 const logger = new Logger('Redis');
 
-const redis = createClient({
-    url: config.db.redisURL,
-    password: config.db.redisPassword || undefined,
-    commandsQueueMaxLength: 128,
-    socket: {
-        connectTimeout: 5000,
-        reconnectStrategy: (retries) => Math.min(retries * 500, 5000)
+const redis = createRedisClient();
+
+function createRedisClient() {
+    logger.info(`Creating Redis client in ${config.redis.mode} mode`);
+    if (config.redis.mode === 'sentinel' && config.redis.sentinel) {
+        return createSentinel({
+            name: config.redis.sentinel.name,
+            sentinelRootNodes: [{ host: config.redis.sentinel.host, port: config.redis.sentinel.port }],
+            nodeClientOptions: {
+                password: config.redis.password || undefined
+            },
+            sentinelClientOptions: {
+                password: config.redis.password || undefined
+            },
+            replicaPoolSize: config.redis.sentinel.replicaPoolSize || 1
+        });
     }
-});
+
+    return createClient({
+        url: config.redis.url,
+        password: config.redis.password || undefined,
+        commandsQueueMaxLength: 128,
+        socket: {
+            connectTimeout: 5000,
+            reconnectStrategy: (retries) => Math.min(retries * 500, 5000)
+        }
+    });
+}
 
 export function getRedisClient() {
     return redis;

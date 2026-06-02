@@ -287,6 +287,7 @@ export default class OIService extends Tracker {
         this.running = false;
         await this.monitorTask?.catch((error) => this.logger.error(`Error while awaiting monitor task: ${error}`));
         this.monitorTask = undefined;
+        await this.screenshoter.stop();
         this.logger.info('Monitoring stopped');
     }
 
@@ -1011,7 +1012,7 @@ export default class OIService extends Tracker {
         const { msg, buttons } = result;
 
         let screenshot: Buffer | null = null;
-        if (config.puppeteer.screenshotEnabled) {
+        if (this.screenshoter) {
             const query = `${event.baseAsset} ${event.exchange} open interest`;
             try {
                 screenshot = await this.screenshoter.capture(

@@ -3,7 +3,7 @@ import { Tracker } from '../../common/tracker';
 import { config } from '../../config';
 import APIService, { Market, Trade } from '../api/polymarket';
 import DBService, { PolyAggregationRecord, PolyTradeInput, PositionKey } from '../db/polymarket';
-import { escapeHtml, formatCurrency, formatDate, sleep, withTimeout } from '../../common/utils';
+import { escapeHtml, formatCurrency, formatDate, sleep } from '../../common/utils';
 
 type MarketCategory = 'sport' | 'esports' | 'regular';
 type AccountTag = 'FRESH' | 'DORMANT' | 'SMALL' | 'MEDIUM' | 'LARGE';
@@ -225,8 +225,6 @@ export default class PolymarketService extends Tracker {
     }
 
     private async scanAndAlert(): Promise<void> {
-        const CANDIDATE_TIMEOUT_MS = 20_000;
-
         if (this.affectedKeys.size === 0) {
             this.logger.info('No affected positions to scan');
             this.lastScanTimestamp = Date.now();
@@ -245,12 +243,9 @@ export default class PolymarketService extends Tracker {
 
         this.logger.info(`Found ${candidates.length} candidates needing alert`);
         for (const candidate of candidates) {
+            this.lastScanTimestamp = Date.now();
             try {
-                await withTimeout(
-                    this.processAlertCandidate(candidate),
-                    CANDIDATE_TIMEOUT_MS,
-                    `processAlertCandidate(${candidate.wallet}/${candidate.conditionId})`
-                );
+                await this.processAlertCandidate(candidate);
             } catch (error) {
                 this.logger.error(`Failed to alert wallet ${candidate.wallet} / ${candidate.conditionId}: ${error}`);
             }
@@ -583,7 +578,7 @@ export default class PolymarketService extends Tracker {
     ): Promise<void> {
         try {
             let screenshot: Buffer | null = null;
-            if (config.puppeteer.screenshotEnabled) {
+            if (this.screenshotEnabled) {
                 try {
                     screenshot = await this.screenshoter.capture(
                         `${config.polymarket.url}/profile/${candidate.wallet}`

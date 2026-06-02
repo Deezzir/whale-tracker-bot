@@ -61,11 +61,13 @@ Create a `.env` file in the project root.
 | `NODE_ENV` | `development` | Runtime environment (`development` or `production`) |
 | `LOG_LEVEL` | `INFO` | Log verbosity (`INFO`, `WARN`, `ERROR`, `DEBUG`) |
 | `LOG_FILE_ENABLED` | `false` | Write logs to `./logs/YYYY-MM-DD.log` |
+| `RESTART_ON_UNHEALTHY` | `false` | When `true`, the process exits with code `1` after sending the owner alert on an unhealthy `/healthz` so an orchestrator can restart it. When `false`, the bot only alerts and keeps running. |
 | `MONGODB_URI` | `mongodb://root:example@localhost:27017` | MongoDB connection URI |
 | `DB_NAME` | `whale-tracker-bot` | Database name (`-dev` suffix is added in development) |
 | `DB_AUTO_INDEX` | `true` in development, `false` in production | Enable Mongoose auto-indexing on connect |
 | `DB_ENSURE_INDEXES_ON_START` | `true` | Explicitly runs `createIndexes()` for all models at startup |
-| `REDIS_URL` | `redis://localhost:6379` | Redis connection URL |
+| `REDIS_MODE` | `standalone` | Redis mode (`standalone` or `sentinel`). |
+| `REDIS_URL` | `redis://localhost:6379` | Redis connection URL (for standalone use `redis://host:port`, for sentinel use `redis://sentinelHost:sentinelPort:sentinelName`) |
 | `REDIS_PASSWORD` | `` | Redis password |
 | `HS_MIN_NOTIONAL_USD` | `250000` | Hyperliquid minimum aggregated notional to consider |
 | `HS_AGGREGATION_WINDOW_MS` | `86400000` | Hyperliquid aggregation window |
@@ -81,23 +83,24 @@ Create a `.env` file in the project root.
 | `STAKE_MIN_BET_USD` | `10000` | Stake minimum bet size for alerts |
 | `POLY_ALERT_THRESHOLD_USD` | `100000` | Polymarket regular market alert threshold |
 | `POLY_SPORT_BET_ALERT_THRESHOLD_USD` | `500000` | Polymarket sport market alert threshold |
-| `POLY_RE_ALERT_THRESHOLD_PERCENT` | `20` | Polymarket re-alert threshold percent |
 | `POLY_MAX_PRICE_FILTER` | `0.98` | Polymarket max price filter |
 | `POLY_POS_CHANGE_ALERT_PERCENT` | `20` | Polymarket growing-position percent threshold |
 | `POLY_POS_CHANGE_ALERT_USD` | `9000` | Polymarket growing-position minimum USD threshold |
-| `PUPPETEER_SCREENSHOT_ENABLED` | `true` | Include screenshots in Stake alerts |
+| `HS_SCREENSHOT_ENABLED` | `true` | Include screenshots in Hyperliquid alerts |
+| `STAKE_SCREENSHOT_ENABLED` | `true` | Include screenshots in Stake alerts |
+| `POLY_SCREENSHOT_ENABLED` | `true` | Include screenshots in Polymarket alerts |
+| `OI_SCREENSHOT_ENABLED` | `true` | Include screenshots in OI anomaly alerts |
 | `PUPPETEER_USER_DIR` | `` | Puppeteer user data directory |
 | `PUPPETEER_HEADLESS` | `true` | Run Puppeteer in headless mode |
+| `PUPPETEER_CONCURRENT_CAPTURES` | `false` | Allow trackers to run screenshot captures in parallel. When `false`, captures are serialized through a FIFO queue. |
 | `PUPPETEER_PROXIES_PATH` | `./resources/ports.txt` | File with proxies for Puppeteer |
 | `PUPPETEER_PROXIES` | `` | Comma-separated proxy list |
 | `OPENROUTER_CLASSIFIER_PROMPT_TEMPLATE_PATH` | `./resources/trade_classifier_prompt.txt` | Prompt template path |
 | `OPENROUTER_FAST_MODEL` | `gpt-3.5-turbo` | OpenRouter model used for fast classification |
 | `COINGLASS_EXCHANGES` | `Gate,Bybit,Binance,OKX,Kraken` | Comma-separated CoinGlass exchanges to monitor. Do not include `Hyperliquid` or `Aster`; they are managed by direct sources. |
 | `COINGLASS_REFRESH_INTERVAL_MS` | `3600000` | Token universe refresh interval (1h) |
-| `COINGLASS_BLACKLIST` | `` | Comma-separated tokens to exclude from OI detection |
-| `COINGLASS_WARMUP_CONCURRENCY` | `5` | Parallel backfill concurrency |
-| `OI_HYPERLIQUID_DIRECT_ENABLED` | `true` | Enable direct Hyperliquid OI collection |
-| `OI_HYPERLIQUID_INTERVAL_MS` | `900000` | Hyperliquid OI collection interval (15 min) |
+| `COINGLASS_WHITELIST` | `` | Comma-separated tokens to track exclusively (empty = track all) |
+| `COINGLASS_GAP_THRESHOLD_INTERVALS` | `3` | Missed 30m intervals before a pair enters DEGRADED_DATA |
 
 ## Run locally
 
@@ -122,7 +125,7 @@ This starts MongoDB, Redis, and the bot container.
   - `docs/components/hyperliquid.md`
   - `docs/components/polymarket.md`
   - `docs/components/stake.md`
-  - `docs/components/coinglass.md`
+  - `docs/components/oi.md`
 - Configuration: `docs/configuration.md`
 - Operations runbook: `docs/operations.md`
 
