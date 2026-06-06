@@ -276,10 +276,10 @@ export default class OIService extends Tracker {
     private oiChannels: ChatChannel[];
     private hlOIChannels: ChatChannel[];
 
-    constructor(tg: Tg, oiChannels: ChatChannel[], hsOIChannels: ChatChannel[], screenshotEnabled = false) {
+    constructor(tg: Tg, oiChannels: ChatChannel[], hlOIChannels: ChatChannel[], screenshotEnabled = false) {
         super(tg, [], screenshotEnabled);
         this.oiChannels = oiChannels;
-        this.hlOIChannels = hsOIChannels;
+        this.hlOIChannels = hlOIChannels;
     }
 
     async start(): Promise<void> {

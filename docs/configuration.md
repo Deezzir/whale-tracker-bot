@@ -11,18 +11,18 @@ If this document and `README.md` disagree, follow `src/config.ts`.
 These are required at startup (`requireEnv(...)` in `src/config.ts`):
 
 - `BOT_TOKEN`
-- `HS_FRESH_WALLET_CHAT_ID`
-- `HS_WHALE_ACTIVITY_CHAT_ID`
-- `HS_BIG_WHALE_CHAT_ID`
-- `HS_TWAP_CHAT_ID`
-- `HS_TRACK_CHAT_ID`
+- `HL_FRESH_WALLET_CHAT_ID`
+- `HL_WHALE_ACTIVITY_CHAT_ID`
+- `HL_BIG_WHALE_CHAT_ID`
+- `HL_TWAP_CHAT_ID`
+- `HL_TRACK_CHAT_ID`
 - `STAKE_CHAT_ID`
 - `POLY_CHAT_ID`
 - `OWNER_USER_ID`
 - `OPENROUTER_API_KEY`
 - `COINGLASS_API_KEY`
 - `OI_CHAT_ID`
-- `OI_HS_CHAT_ID`
+- `OI_HL_CHAT_ID`
 
 ## Optional Environment Variables (Selected)
 
@@ -46,26 +46,26 @@ DB/cache:
 
 Hyperliquid:
 
-- `HS_EXCLUDE_DEXES`
-- `HS_MIN_NOTIONAL_USD`
-- `HS_MIN_SPOT_NOTIONAL_USD`
-- `HS_AGGREGATION_WINDOW_MS`
-- `HS_POS_CHANGE_ALERT_PERCENT`
-- `HS_POS_CHANGE_ALERT_USD`
-- `HS_SCREENSHOT_ENABLED`
+- `HL_EXCLUDE_DEXES`
+- `HL_MIN_NOTIONAL_USD`
+- `HL_MIN_SPOT_NOTIONAL_USD`
+- `HL_AGGREGATION_WINDOW_MS`
+- `HL_POS_CHANGE_ALERT_PERCENT`
+- `HL_POS_CHANGE_ALERT_USD`
+- `HL_SCREENSHOT_ENABLED`
 
 ### Alert Branch Thresholds
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `HS_FRESH_WINDOW_MS` | `180000000` (50h) | Time window to consider a wallet "fresh" |
-| `HS_FRESH_MIN_USD` | `200000` | Min position for fresh wallet alert (other coins) |
-| `HS_FRESH_MAIN_COIN_MIN_USD` | `450000` | Min position for fresh wallet alert (main coins: BTC, ETH, BNB, XRP, ZEC, DOGE, SOL, HYPE) |
-| `HS_WHALE_MIN_USD` | `300000` | Min position for whale activity alert (excl. BTC/ETH) |
-| `HS_BIG_WHALE_MIN_USD` | `1000000` | Min position for big whale alert (all coins) |
-| `HS_TWAP_BTC_ETH_MIN_USD` | `1000000` | Min accumulation for TWAP alert (BTC/ETH) |
-| `HS_TWAP_OTHER_MIN_USD` | `300000` | Min accumulation for TWAP alert (other coins) |
-| `HS_POS_CHANGE_ALERT_PERCENT` | `9` | Re-alert growth threshold (%) |
+| `HL_FRESH_WINDOW_MS` | `180000000` (50h) | Time window to consider a wallet "fresh" |
+| `HL_FRESH_MIN_USD` | `200000` | Min position for fresh wallet alert (other coins) |
+| `HL_FRESH_MAIN_COIN_MIN_USD` | `450000` | Min position for fresh wallet alert (main coins: BTC, ETH, BNB, XRP, ZEC, DOGE, SOL, HYPE) |
+| `HL_WHALE_MIN_USD` | `300000` | Min position for whale activity alert (excl. BTC/ETH) |
+| `HL_BIG_WHALE_MIN_USD` | `1000000` | Min position for big whale alert (all coins) |
+| `HL_TWAP_BTC_ETH_MIN_USD` | `1000000` | Min accumulation for TWAP alert (BTC/ETH) |
+| `HL_TWAP_OTHER_MIN_USD` | `300000` | Min accumulation for TWAP alert (other coins) |
+| `HL_POS_CHANGE_ALERT_PERCENT` | `9` | Re-alert growth threshold (%) |
 
 Note: Fresh Wallet and Whale Activity branches exclude BTC and ETH entirely.
 
@@ -93,7 +93,7 @@ Puppeteer (browser runtime used by the shared screenshoter):
 - `PUPPETEER_PROXIES`
 - `PUPPETEER_EXECUTABLE_PATH` (read directly by the screenshoter service)
 
-Per-tracker screenshot enablement is controlled by `HS_SCREENSHOT_ENABLED`, `STAKE_SCREENSHOT_ENABLED`, `POLY_SCREENSHOT_ENABLED`, and `OI_SCREENSHOT_ENABLED`. The screenshoter itself is a process-wide singleton shared by all trackers.
+Per-tracker screenshot enablement is controlled by `HL_SCREENSHOT_ENABLED`, `STAKE_SCREENSHOT_ENABLED`, `POLY_SCREENSHOT_ENABLED`, and `OI_SCREENSHOT_ENABLED`. The screenshoter itself is a process-wide singleton shared by all trackers.
 
 OpenRouter:
 
@@ -135,15 +135,15 @@ Each alert branch routes to its own dedicated Telegram channel (no topics):
 
 | Branch | Env Variable |
 |--------|-------------|
-| Fresh Wallet | `HS_FRESH_WALLET_CHAT_ID` |
-| Whale Activity | `HS_WHALE_ACTIVITY_CHAT_ID` |
-| Big Whale | `HS_BIG_WHALE_CHAT_ID` |
-| Big TWAP | `HS_TWAP_CHAT_ID` |
-| Tracked Wallets | `HS_TRACK_CHAT_ID` |
+| Fresh Wallet | `HL_FRESH_WALLET_CHAT_ID` |
+| Whale Activity | `HL_WHALE_ACTIVITY_CHAT_ID` |
+| Big Whale | `HL_BIG_WHALE_CHAT_ID` |
+| Big TWAP | `HL_TWAP_CHAT_ID` |
+| Tracked Wallets | `HL_TRACK_CHAT_ID` |
 | Stake | `STAKE_CHAT_ID` |
 | Polymarket | `POLY_CHAT_ID` |
 | CoinGlass OI | `OI_CHAT_ID` |
-| Hyperliquid OI | `OI_HS_CHAT_ID` |
+| Hyperliquid OI | `OI_HL_CHAT_ID` |
 
 ## Configuration Ownership Map
 

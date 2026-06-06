@@ -42,18 +42,18 @@ Create a `.env` file in the project root.
 | Variable | Description |
 | --- | --- |
 | `BOT_TOKEN` | Telegram bot token |
-| `HS_FRESH_WALLET_CHAT_ID` | Channel ID for Fresh Wallet alerts |
-| `HS_WHALE_ACTIVITY_CHAT_ID` | Channel ID for Whale Activity alerts |
-| `HS_BIG_WHALE_CHAT_ID` | Channel ID for Big Whale alerts |
-| `HS_TWAP_CHAT_ID` | Channel ID for TWAP alerts |
-| `HS_TRACK_CHAT_ID` | Channel ID for tracked wallet notifications |
+| `HL_FRESH_WALLET_CHAT_ID` | Channel ID for Fresh Wallet alerts |
+| `HL_WHALE_ACTIVITY_CHAT_ID` | Channel ID for Whale Activity alerts |
+| `HL_BIG_WHALE_CHAT_ID` | Channel ID for Big Whale alerts |
+| `HL_TWAP_CHAT_ID` | Channel ID for TWAP alerts |
+| `HL_TRACK_CHAT_ID` | Channel ID for tracked wallet notifications |
 | `STAKE_CHAT_ID` | Channel ID for Stake alerts |
 | `POLY_CHAT_ID` | Channel ID for Polymarket alerts |
 | `OWNER_USER_ID` | Telegram user ID used for owner-level checks and watchdog alerts |
 | `OPENROUTER_API_KEY` | OpenRouter API key |
 | `COINGLASS_API_KEY` | CoinGlass API key (STARTUP plan) |
 | `OI_CHAT_ID` | Channel ID for CoinGlass OI anomaly alerts |
-| `OI_HS_CHAT_ID` | Channel ID for Hyperliquid OI anomaly alerts |
+| `OI_HL_CHAT_ID` | Channel ID for Hyperliquid OI anomaly alerts |
 
 ### Optional (with defaults)
 
@@ -70,24 +70,24 @@ Create a `.env` file in the project root.
 | `REDIS_MODE` | `standalone` | Redis mode (`standalone` or `sentinel`). |
 | `REDIS_URL` | `redis://localhost:6379` | Redis connection URL (for standalone use `redis://host:port`, for sentinel use `redis://sentinelHost:sentinelPort:sentinelName`) |
 | `REDIS_PASSWORD` | `` | Redis password |
-| `HS_MIN_NOTIONAL_USD` | `250000` | Hyperliquid minimum aggregated notional to consider |
-| `HS_AGGREGATION_WINDOW_MS` | `86400000` | Hyperliquid aggregation window |
-| `HS_POS_CHANGE_ALERT_PERCENT` | `9` | Re-alert growth threshold (%) |
-| `HS_POS_CHANGE_ALERT_USD` | `50000` | Re-alert minimum USD move |
-| `HS_FRESH_WINDOW_MS` | `180000000` | Fresh wallet time window (50h) |
-| `HS_FRESH_MIN_USD` | `200000` | Fresh wallet min position (other coins) |
-| `HS_FRESH_MAIN_COIN_MIN_USD` | `450000` | Fresh wallet min position (main coins) |
-| `HS_WHALE_MIN_USD` | `300000` | Whale activity min position |
-| `HS_BIG_WHALE_MIN_USD` | `1000000` | Big whale min position |
-| `HS_TWAP_BTC_ETH_MIN_USD` | `1000000` | TWAP min for BTC/ETH |
-| `HS_TWAP_OTHER_MIN_USD` | `300000` | TWAP min for other coins |
+| `HL_MIN_NOTIONAL_USD` | `250000` | Hyperliquid minimum aggregated notional to consider |
+| `HL_AGGREGATION_WINDOW_MS` | `86400000` | Hyperliquid aggregation window |
+| `HL_POS_CHANGE_ALERT_PERCENT` | `9` | Re-alert growth threshold (%) |
+| `HL_POS_CHANGE_ALERT_USD` | `50000` | Re-alert minimum USD move |
+| `HL_FRESH_WINDOW_MS` | `180000000` | Fresh wallet time window (50h) |
+| `HL_FRESH_MIN_USD` | `200000` | Fresh wallet min position (other coins) |
+| `HL_FRESH_MAIN_COIN_MIN_USD` | `450000` | Fresh wallet min position (main coins) |
+| `HL_WHALE_MIN_USD` | `300000` | Whale activity min position |
+| `HL_BIG_WHALE_MIN_USD` | `1000000` | Big whale min position |
+| `HL_TWAP_BTC_ETH_MIN_USD` | `1000000` | TWAP min for BTC/ETH |
+| `HL_TWAP_OTHER_MIN_USD` | `300000` | TWAP min for other coins |
 | `STAKE_MIN_BET_USD` | `10000` | Stake minimum bet size for alerts |
 | `POLY_ALERT_THRESHOLD_USD` | `100000` | Polymarket regular market alert threshold |
 | `POLY_SPORT_BET_ALERT_THRESHOLD_USD` | `500000` | Polymarket sport market alert threshold |
 | `POLY_MAX_PRICE_FILTER` | `0.98` | Polymarket max price filter |
 | `POLY_POS_CHANGE_ALERT_PERCENT` | `20` | Polymarket growing-position percent threshold |
 | `POLY_POS_CHANGE_ALERT_USD` | `9000` | Polymarket growing-position minimum USD threshold |
-| `HS_SCREENSHOT_ENABLED` | `true` | Include screenshots in Hyperliquid alerts |
+| `HL_SCREENSHOT_ENABLED` | `true` | Include screenshots in Hyperliquid alerts |
 | `STAKE_SCREENSHOT_ENABLED` | `true` | Include screenshots in Stake alerts |
 | `POLY_SCREENSHOT_ENABLED` | `true` | Include screenshots in Polymarket alerts |
 | `OI_SCREENSHOT_ENABLED` | `true` | Include screenshots in OI anomaly alerts |

@@ -48,7 +48,7 @@ Each alert carries two inline buttons:
 - **📊 View OI on Coinalyze** — link to the Coinalyze OI chart (currently a static `https://coinalyze.net/` link).
 - **🚫 Blacklist** — callback `bl:<allowlistEntryId>` that removes the pair from the OI allowlist so it stops alerting (see Token Gating).
 
-Coinglass alerts route to `OI_CHAT_ID`; Hyperliquid OI alerts route to `OI_HS_CHAT_ID`.
+Coinglass alerts route to `OI_CHAT_ID`; Hyperliquid OI alerts route to `OI_HL_CHAT_ID`.
 
 ## Token Gating (Allowlist) and Blacklist
 
@@ -57,7 +57,7 @@ The `OIWhitelistEntry` collection (keyed by `{exchange, instrumentId}`) is the *
 - During each scan cycle, every candidate pair is checked with `getWhitelistEntry(exchange, instrumentId)`. **Pairs not present in the allowlist are skipped** for both Coinglass and Hyperliquid sources.
 - The full instrument universe is still discovered and persisted to MongoDB (`ExchangeInstrumentUniverse`) regardless of the allowlist. `refreshCoinglassUniverse` only warms up pairs that are on the allowlist.
 - The allowlist is **seeded once** (e.g. `bun run src/test.ts`, optionally narrowed by a `COINGLASS_WHITELIST` env list of base assets). The periodic universe refresh deliberately does **not** re-seed it, so removals persist.
-- The **🚫 Blacklist** button (`bl:<allowlistEntryId>`) deletes the matching allowlist entry via `removeFromWhitelist`, narrowing the source-of-truth list and permanently suppressing that pair's alerts. The handler accepts the action from either the Coinglass (`OI_CHAT_ID`) or Hyperliquid (`OI_HS_CHAT_ID`) channel.
+- The **🚫 Blacklist** button (`bl:<allowlistEntryId>`) deletes the matching allowlist entry via `removeFromWhitelist`, narrowing the source-of-truth list and permanently suppressing that pair's alerts. The handler accepts the action from either the Coinglass (`OI_CHAT_ID`) or Hyperliquid (`OI_HL_CHAT_ID`) channel.
 
 > A fresh deployment with an empty `OIWhitelistEntry` collection emits no alerts until the allowlist is seeded.
 

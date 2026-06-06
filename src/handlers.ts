@@ -52,7 +52,7 @@ async function extractTrackData(
 }
 
 export function registerHyperliquidHandlers(tg: TelegramService, hl: HyperliquidService) {
-    const trackChatID = config.telegram.hsTrackChatID;
+    const trackChatID = config.telegram.hlTrackChatID;
     const bot = tg.getBot();
 
     bot.command('stats', async (ctx) => {
@@ -105,7 +105,7 @@ export function registerHyperliquidHandlers(tg: TelegramService, hl: Hyperliquid
         await ctx.answerCbQuery();
         await ctx.reply(msg, { parse_mode: 'HTML' });
         if (buttons) await ctx.editMessageReplyMarkup(buttons);
-        await tg.sendMessage(config.telegram.hsTrackChatID, msg);
+        await tg.sendMessage(config.telegram.hlTrackChatID, msg);
     });
 
     bot.action(/^untrack:(.+)$/, async (ctx) => {
@@ -125,7 +125,7 @@ export function registerOIHandlers(tg: TelegramService, oi: OIService) {
     const bot = tg.getBot();
 
     bot.action(/^bl:(.+)$/, async (ctx) => {
-        if (!(await tg.checkMessageSource(ctx, [config.telegram.hsOIChatID, config.telegram.oiChatID], false))) return;
+        if (!(await tg.checkMessageSource(ctx, [config.telegram.hlOIChatID, config.telegram.oiChatID], false))) return;
 
         if (!ctx.match || ctx.match.length !== 2) {
             await ctx.answerCbQuery('Invalid command format.');

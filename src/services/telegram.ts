@@ -79,7 +79,7 @@ export default class TelegramService {
         const channelMessages: { chatId: number; message: string; tracker: string }[] = [
             {
                 tracker: HyperliquidService.name,
-                chatId: config.telegram.hsFreshWalletChatID,
+                chatId: config.telegram.hlFreshWalletChatID,
                 message: [
                     `<b>🟢 Fresh Wallet Channel</b>`,
                     ``,
@@ -92,7 +92,7 @@ export default class TelegramService {
             },
             {
                 tracker: HyperliquidService.name,
-                chatId: config.telegram.hsWhaleActivityChatID,
+                chatId: config.telegram.hlWhaleActivityChatID,
                 message: [
                     `<b>🟢 Whale Activity Channel</b>`,
                     ``,
@@ -103,7 +103,7 @@ export default class TelegramService {
             },
             {
                 tracker: HyperliquidService.name,
-                chatId: config.telegram.hsBigWhaleChatID,
+                chatId: config.telegram.hlBigWhaleChatID,
                 message: [
                     `<b>🟢 Big Whale Channel</b>`,
                     ``,
@@ -114,7 +114,7 @@ export default class TelegramService {
             },
             {
                 tracker: HyperliquidService.name,
-                chatId: config.telegram.hsTwapChatID,
+                chatId: config.telegram.hlTwapChatID,
                 message: [
                     `<b>🟢 TWAP Channel</b>`,
                     ``,

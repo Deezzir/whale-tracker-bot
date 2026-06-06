@@ -37,11 +37,11 @@ function getEnabledTrackers(): Tracker[] {
                     services.push(
                         new HyperliquidService(
                             telegram,
-                            [{ chatId: config.telegram.hsFreshWalletChatID }],
-                            [{ chatId: config.telegram.hsWhaleActivityChatID }],
-                            [{ chatId: config.telegram.hsBigWhaleChatID }],
-                            [{ chatId: config.telegram.hsTwapChatID }],
-                            [{ chatId: config.telegram.hsTrackChatID }],
+                            [{ chatId: config.telegram.hlFreshWalletChatID }],
+                            [{ chatId: config.telegram.hlWhaleActivityChatID }],
+                            [{ chatId: config.telegram.hlBigWhaleChatID }],
+                            [{ chatId: config.telegram.hlTwapChatID }],
+                            [{ chatId: config.telegram.hlTrackChatID }],
                             config.hyperliquid.screenshotEnabled
                         )
                     );
@@ -70,7 +70,7 @@ function getEnabledTrackers(): Tracker[] {
                         new OIService(
                             telegram,
                             [{ chatId: config.telegram.oiChatID }],
-                            [{ chatId: config.telegram.hsOIChatID }],
+                            [{ chatId: config.telegram.hlOIChatID }],
                             config.oi.screenshotEnabled
                         )
                     );

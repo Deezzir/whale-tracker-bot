@@ -110,7 +110,7 @@ Action:
 
 Symptom:
 
-- OI scan cycles log scanned pairs, but no alerts reach `OI_CHAT_ID` / `OI_HS_CHAT_ID`.
+- OI scan cycles log scanned pairs, but no alerts reach `OI_CHAT_ID` / `OI_HL_CHAT_ID`.
 
 Action:
 

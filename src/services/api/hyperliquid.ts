@@ -133,10 +133,10 @@ export default class HyperliquidAPI {
     private client: ApiClient;
     private redis = getRedisClient();
 
-    private portfolioCacheKey = (user: string) => `hs:portfolio:${user}`;
+    private portfolioCacheKey = (user: string) => `hl:portfolio:${user}`;
     private clearinghouseCacheKey = (type: 'spot' | 'perp', user: string, dex?: string) =>
-        `hs:clearinghouse:${type}:${dex ? dex : 'default'}:${user}`;
-    private perpDexesCacheKey = (dex?: string) => `hs:perp-meta:${dex ? dex : 'default'}`;
+        `hl:clearinghouse:${type}:${dex ? dex : 'default'}:${user}`;
+    private perpDexesCacheKey = (dex?: string) => `hl:perp-meta:${dex ? dex : 'default'}`;
 
     constructor() {
         this.client = createApiClient({
@@ -150,7 +150,7 @@ export default class HyperliquidAPI {
     }
 
     public async fetchPerpDexes(): Promise<(PerpDex | null)[] | null> {
-        const cacheKey = 'hs:perp-dexes';
+        const cacheKey = 'hl:perp-dexes';
 
         const cachedDexes = await this.redis.get(cacheKey);
         if (cachedDexes) return JSON.parse(cachedDexes);
@@ -187,7 +187,7 @@ export default class HyperliquidAPI {
     }
 
     public async fetchSpotMeta(): Promise<SpotMeta | null> {
-        const cacheKey = 'hs:spot-meta';
+        const cacheKey = 'hl:spot-meta';
 
         const cachedSpot = await this.redis.get(cacheKey);
         if (cachedSpot) return JSON.parse(cachedSpot);
@@ -327,7 +327,7 @@ export default class HyperliquidAPI {
     }
 
     public async fetchCoins(excludeDexes: string[]): Promise<string[]> {
-        const cacheKey = 'hs:perp-coins-all';
+        const cacheKey = 'hl:perp-coins-all';
 
         const cached = await this.redis.get(cacheKey);
         if (cached) return JSON.parse(cached);
@@ -353,7 +353,7 @@ export default class HyperliquidAPI {
     }
 
     public async fetchSpotCoins(): Promise<SpotWsPair[]> {
-        const cacheKey = 'hs:spot-coins-all';
+        const cacheKey = 'hl:spot-coins-all';
 
         const cached = await this.redis.get(cacheKey);
         if (cached) return JSON.parse(cached);
@@ -416,7 +416,7 @@ export default class HyperliquidAPI {
     }
 
     public async fetchL2Book(coin: string): Promise<L2BookResponse | null> {
-        const cacheKey = `hs:l2book:${coin}`;
+        const cacheKey = `hl:l2book:${coin}`;
         const cached = await this.redis.get(cacheKey);
         if (cached) return JSON.parse(cached);
 
@@ -432,7 +432,7 @@ export default class HyperliquidAPI {
     }
 
     public async fetchTokenDetails(tokenId: string): Promise<TokenDetails | null> {
-        const cacheKey = `hs:token-details:${tokenId}`;
+        const cacheKey = `hl:token-details:${tokenId}`;
         const cached = await this.redis.get(cacheKey);
         if (cached) return JSON.parse(cached);
 
