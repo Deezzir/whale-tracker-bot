@@ -349,7 +349,12 @@ export default class StakeService extends Tracker {
                 screenshot = await this.screenshoter.capture(
                     `${this.url}/sports/home?iid=${candidate.iid}&modal=bet`,
                     'div[data-modal-card="true"]',
-                    () => !!document.querySelector('div[data-modal-card="true"] div.content'),
+                    () => {
+                        const modal = document.querySelector('div[data-modal-card="true"]');
+                        if (!modal) return false;
+                        if (modal.querySelector('div.content .loader')) return false;
+                        return !!modal.querySelector('[data-testid="bet-outcome-label"]');
+                    },
                     undefined,
                     undefined,
                     this.proxy

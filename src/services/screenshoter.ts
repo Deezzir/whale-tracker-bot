@@ -164,8 +164,16 @@ export default class ScreenshotService {
 
             if (prehook) await prehook(page);
 
-            if (waitFn)
-                await page.waitForFunction(waitFn, { timeout: ScreenshotService.NAVIGATION_TIMEOUT_MS, polling: 1000 });
+            if (waitFn) {
+                try {
+                    await page.waitForFunction(waitFn, {
+                        timeout: ScreenshotService.NAVIGATION_TIMEOUT_MS,
+                        polling: 1000
+                    });
+                } catch (err) {
+                    logger.warn(`waitFn timed out for ${url}, capturing current state: ${err}`);
+                }
+            }
 
             if (selector) {
                 const element = await page.waitForSelector(selector, {

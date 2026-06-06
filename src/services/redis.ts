@@ -7,7 +7,6 @@ const logger = new Logger('Redis');
 const redis = createRedisClient();
 
 function createRedisClient() {
-    logger.info(`Creating Redis client in ${config.redis.mode} mode`);
     if (config.redis.mode === 'sentinel' && config.redis.sentinel) {
         return createSentinel({
             name: config.redis.sentinel.name,
@@ -43,8 +42,9 @@ export async function connectRedis() {
             logger.error(`Redis Client Error: ${err}`);
             process.exit(1);
         });
+        logger.info(`Connecting to Redis in ${config.redis.mode} mode`);
         await redis.connect();
-        // logger.info('Connected to Redis');
+        logger.info('Redis Connected');
     } catch (error) {
         logger.error(`Redis connection error: ${error}`);
         process.exit(1);
@@ -53,7 +53,7 @@ export async function connectRedis() {
 
 export async function closeRedis() {
     try {
-        await redis.quit();
+        await redis.close();
         logger.info('Redis connection closed');
     } catch (error) {
         logger.error(`Error closing Redis connection: ${error}`);
