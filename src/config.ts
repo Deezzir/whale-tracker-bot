@@ -252,6 +252,7 @@ export const config = {
         cumulativeZThreshold: 8, // slow accumulation over 4 candles → HIGH
         cumulativeZWindow: 4, // candles for cumulative z
         cusumThreshold: 12, // sustained build → CRITICAL
+        madFloorFraction: 0.0075,
         minOIThreshold: 1_000_000, // minimum OI in USD to consider for detection
         minDeltaOIUsd: 100_000, // minimum OI delta (USD) required for any trigger
         minDeltaOIPercent: 1.5, // minimum OI delta (%) required for any trigger

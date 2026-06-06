@@ -149,8 +149,9 @@ function computeMAD(values: number[]): { median: number; mad: number } {
     return { median, mad };
 }
 
-function computeRobustZScore(value: number, median: number, mad: number): number {
-    const scaledMAD = 1.4826 * mad;
+function computeRobustZScore(value: number, median: number, mad: number, oiLevel = 0): number {
+    const madFloor = Math.max(0, oiLevel) * config.oi.madFloorFraction;
+    const scaledMAD = Math.max(1.4826 * mad, madFloor);
     if (scaledMAD === 0) return 0;
     return (value - median) / scaledMAD;
 }
@@ -180,7 +181,7 @@ function updatePairState(state: PairStatisticalState, newOIClose: number): void 
 
     // Compute robust z-score using MAD
     const { median, mad } = computeMAD(state.recentDeltaOI);
-    const zScore = computeRobustZScore(deltaOI, median, mad);
+    const zScore = computeRobustZScore(deltaOI, median, mad, newOIClose);
 
     // Update recentZScores ring buffer (keep last cumulativeZWindow)
     state.recentZScores.push(zScore);
@@ -200,7 +201,6 @@ function updatePairState(state: PairStatisticalState, newOIClose: number): void 
 function detectAnomaly(state: PairStatisticalState): Omit<OIAnomalyEvent, 'priceContext' | 'detectedAt'> | null {
     if (state.status !== 'READY') return null;
     if (state.recentZScores.length === 0) return null;
-    if ((state.lastOI || 0) < config.oi.minOIThreshold) return null;
 
     const latestZ = state.recentZScores[state.recentZScores.length - 1];
     const previousOI =
@@ -211,9 +211,7 @@ function detectAnomaly(state: PairStatisticalState): Omit<OIAnomalyEvent, 'price
     const deltaOI = state.recentDeltaOI.length > 0 ? state.recentDeltaOI[state.recentDeltaOI.length - 1] : 0;
     const deltaOIPercent = previousOI > 0 ? (deltaOI / previousOI) * 100 : 0;
 
-    // Global quality gates to reduce low-signal noise
     if (deltaOI <= 0) return null;
-    if (deltaOI < config.oi.minDeltaOIUsd) return null;
     if (deltaOIPercent < config.oi.minDeltaOIPercent) return null;
 
     // Check CUSUM first (CRITICAL severity)
@@ -268,6 +266,27 @@ function detectAnomaly(state: PairStatisticalState): Omit<OIAnomalyEvent, 'price
     }
 
     return null;
+}
+
+function finalizeAnomalyUsd(
+    candidate: Omit<OIAnomalyEvent, 'priceContext' | 'detectedAt'>,
+    price: number
+): Omit<OIAnomalyEvent, 'priceContext' | 'detectedAt'> | null {
+    if (!isFinite(price) || price <= 0) return null;
+
+    const currentOIUsd = candidate.currentOI * price;
+    const previousOIUsd = candidate.previousOI * price;
+    const deltaOIUsd = candidate.deltaOI * price;
+
+    if (currentOIUsd < config.oi.minOIThreshold) return null;
+    if (deltaOIUsd < config.oi.minDeltaOIUsd) return null;
+
+    return {
+        ...candidate,
+        previousOI: previousOIUsd,
+        currentOI: currentOIUsd,
+        deltaOI: deltaOIUsd
+    };
 }
 
 export default class OIService extends Tracker {
@@ -826,7 +845,7 @@ export default class OIService extends Tracker {
                 source: 'HYPERLIQUID',
                 intervalStart,
                 observedAt: now,
-                openInterest: snap.openInterest,
+                openInterest: snap.rawOpenInterest,
                 rawOpenInterest: snap.rawOpenInterest,
                 markPrice: snap.markPrice,
                 midPrice: snap.midPrice ?? undefined,
@@ -853,7 +872,7 @@ export default class OIService extends Tracker {
                     state.status = 'READY';
                 }
 
-                updatePairState(state, snap.openInterest);
+                updatePairState(state, snap.rawOpenInterest);
                 state.lastObservationAt = intervalStart;
 
                 if (prevStatus === 'WARMUP' && state.status === 'READY') {
@@ -862,18 +881,21 @@ export default class OIService extends Tracker {
 
                 const detection = detectAnomaly(state);
                 if (detection) {
-                    anomaliesDetected++;
                     state.cusumScore = 0;
-                    this.lastDataTimestamp = Date.now();
+                    const event = finalizeAnomalyUsd(detection, snap.markPrice);
+                    if (event) {
+                        anomaliesDetected++;
+                        this.lastDataTimestamp = Date.now();
 
-                    await this.sendAlert(
-                        {
-                            ...detection,
-                            detectedAt: new Date(),
-                            pairEntryId: whitelistEntry.id
-                        },
-                        this.hlOIChannels
-                    );
+                        await this.sendAlert(
+                            {
+                                ...event,
+                                detectedAt: new Date(),
+                                pairEntryId: whitelistEntry.id
+                            },
+                            this.hlOIChannels
+                        );
+                    }
                 }
             } catch (error) {
                 this.logger.error(`Error evaluating Hyperliquid pair ${pairKey}: ${error}`);
@@ -1065,8 +1087,25 @@ export default class OIService extends Tracker {
 
         state.cusumScore = 0;
 
+        const priceCandles = await this.api.fetchPriceHistory(
+            state.exchange,
+            state.instrumentId,
+            this.defaultInterval,
+            1
+        );
+        const price = priceCandles && priceCandles.length > 0 ? priceCandles[priceCandles.length - 1].close : NaN;
+        if (!isFinite(price) || price <= 0) {
+            this.logger.warn(
+                `No price for ${state.exchange}:${state.instrumentId}, cannot resolve USD for anomaly, suppressing`
+            );
+            return null;
+        }
+
+        const event = finalizeAnomalyUsd(detection, price);
+        if (!event) return null;
+
         return {
-            ...detection,
+            ...event,
             detectedAt: new Date()
         };
     }

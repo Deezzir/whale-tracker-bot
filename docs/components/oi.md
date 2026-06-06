@@ -17,29 +17,29 @@ OIService (tracker)
 │       └── CUSUM + recentZScores reset after warmup (prevents false-positive burst)
 ├── Coinglass Scan Cycle (5min sleep between cycles)
 │   ├── Gap detection → DEGRADED_DATA transition if ≥3 intervals missed
-│   ├── evaluatePair() → fetchOIHistory(1) → persist observation → updatePairState() → detectAnomaly()
-│   ├── Price context: fetchPriceHistory(4) → computePriceContext()
+│   ├── evaluateCoinglassPair() → fetchOIHistory(unit=coin, 1) → persist coin observation → updatePairState() → detectAnomaly()
+│   ├── On trigger: fetchPriceHistory(1) → finalizeAnomalyUsd() → USD size gates + USD display
 │   └── sendAlert() → cooldown check → Telegram (with Coinalyze OI chart button) → persist OIAlertRecord
 └── Hyperliquid Scan Cycle (15min)
-    ├── fetchPerpMeta() → normalizeHLPerpContexts() → persist observations
-    └── updatePairState() → detectAnomaly() → sendAlert()
+    ├── fetchPerpMeta() → normalizeHLPerpContexts() → persist coin observations
+    └── updatePairState(coin) → detectAnomaly() → finalizeAnomalyUsd(markPrice) → sendAlert()
 ```
 
 ## Detection Pipeline
 
-1. **ΔOI computation**: interval-over-interval OI change
+> **Unit model**: the statistical model runs on **coin/token-denominated OI** (price-decoupled), so price pumps no longer masquerade as OI anomalies. OI history is fetched with `unit=coin` and persisted in coins (`OIObservation.openInterest`). USD is reconstructed only when a trigger fires — for free on Hyperliquid via `markPrice`, and via a single lazy `fetchPriceHistory` call on Coinglass — and is used purely for the economic size gates and alert display. The z/CUSUM thresholds are scale-invariant, so they are identical for coin or USD deltas.
+
+1. **ΔOI computation**: interval-over-interval coin OI change
 2. **EWMA normalization**: exponentially weighted mean & variance (α ≈ 0.02062, 48h effective window at 30m intervals)
-3. **MAD-based robust z-score**: resistant to fat-tailed outliers
-4. **Global quality gates** (apply before trigger checks):
-   - current OI must be >= $1.0M
+3. **MAD-based robust z-score**: resistant to fat-tailed outliers; the robust scale is floored at `madFloorFraction × coin OI` (default 0.75%) so ultra-stable books cannot inflate z for trivial moves
+4. **Unit-agnostic gate** (before trigger checks):
    - current candle must have positive ΔOI
-   - current candle must have ΔOI >= $100K
    - current candle must have ΔOI >= 1.5%
-5. **Three trigger channels**:
+5. **Three trigger channels** (on coin z-scores):
    - Fast Spike: single-interval z > 4 → HIGH
    - Slow Accumulation: cumulative z over 4 candles > 8 → HIGH
    - Sustained Build: CUSUM > 12 (drift k=1) → CRITICAL
-6. **Price context**: annotates alerts with stealth positioning flag when |price change| ≤ 2%
+6. **USD finalize** (`finalizeAnomalyUsd`, after a trigger fires): resolve price → reject unless current OI >= $1.0M and ΔOI >= $100K → render the alert in USD (ΔOI% is the price-independent coin %)
 
 ## Alert Format
 

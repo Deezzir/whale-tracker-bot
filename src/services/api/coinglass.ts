@@ -82,14 +82,16 @@ export default class CoinglassAPI {
         exchange: string,
         symbol: string,
         interval: Interval = '30m',
-        limit: number = 96
+        limit: number = 96,
+        unit: 'usd' | 'coin' = 'coin'
     ): Promise<OICandle[] | null> {
         try {
             const data = await this.request<any[]>('/api/futures/open-interest/history', {
                 exchange,
                 symbol,
                 interval,
-                limit
+                limit,
+                unit
             });
 
             return (data || [])
