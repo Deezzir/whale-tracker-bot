@@ -738,6 +738,7 @@ export default class HyperliquidService extends Tracker {
             this.lastDataTimestamp = Date.now();
 
             try {
+                this.logger.info(`Flushing trade batch of size ${batchToFlush.length}`);
                 await DBService.addTradesBulk(batchToFlush, config.hyperliquid.aggregationWindowMs);
                 for (const trade of batchToFlush) {
                     const keyStr = `${trade.wallet}:${trade.coin}:${trade.direction}`;
@@ -983,9 +984,10 @@ export default class HyperliquidService extends Tracker {
                 }
             }
 
-            this.logger.debug(
+            this.logger.info(
                 `Prefetch batch ${batchIndex}/${totalBatches} done in ${Date.now() - batchStart}ms: ${batchSuccess} ok, ${batchSkipped} skipped`
             );
+            this.lastScanTimestamp = Date.now();
         }
 
         this.logger.info(`Prefetch complete: ${result.size}/${wallets.length} wallets ready`);

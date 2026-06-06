@@ -73,17 +73,22 @@ export abstract class Tracker extends Runner {
 
     protected async scanWatchDog(timeoutMs: number): Promise<void> {
         const checkInterval = Math.min(Math.floor(timeoutMs / 3), 60_000);
+        let lastCheckedTimestamp = this.lastScanTimestamp;
 
         while (this.running) {
             try {
-                const elapsed = Date.now() - this.lastScanTimestamp;
+                const now = Date.now();
+                const elapsed = now - this.lastScanTimestamp;
                 if (elapsed >= timeoutMs) {
                     this.scanStallCount++;
+                    this.lastScanTimestamp = now;
+                    lastCheckedTimestamp = now;
                     this.logger.warn(
-                        `Scan loop stall detected: no scan completed for ${Math.round(elapsed / 1000)}s (stall count: ${this.scanStallCount})`
+                        `Scan loop stall detected: no scan progress for ${Math.round(elapsed / 1000)}s (stall count: ${this.scanStallCount})`
                     );
                     await this.tg.sendNoScanAlert(this.name, timeoutMs, this.scanStallCount);
-                } else if (this.scanStallCount > 0) {
+                } else if (this.lastScanTimestamp !== lastCheckedTimestamp) {
+                    lastCheckedTimestamp = this.lastScanTimestamp;
                     this.scanStallCount = 0;
                 }
             } catch (err) {
