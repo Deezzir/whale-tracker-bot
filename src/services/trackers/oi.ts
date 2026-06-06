@@ -351,7 +351,7 @@ export default class OIService extends Tracker {
                     this.logger.error(`Failed to run Hyperliquid scan cycle: ${error}`);
                 }
                 if (!this.running) break;
-                await this.cancellableSleep(config.oi.hyperliquidIntervalMs);
+                await this.cancellableSleep(config.oi.hlIntervalMs);
             }
         };
 
@@ -386,12 +386,8 @@ export default class OIService extends Tracker {
         ]);
     }
 
-    private async refreshCoinglassUniverse(): Promise<number> {
-        const whitelist = await DBService.getWhitelist();
-        const whitelisted = new Set(whitelist.map((w) => `${w.exchange}:${w.instrumentId}`));
+    private async refreshCoinglassUniverse(whitelist: Set<string>): Promise<number> {
         let totalPairs = 0;
-
-        if (whitelist.length > 0) this.logger.info(`Coinglass whitelisting: (${whitelist.length} tokens included)`);
 
         for (const exchange of config.oi.coinglassExchanges) {
             try {
@@ -400,9 +396,8 @@ export default class OIService extends Tracker {
                 await DBService.upsertInstrumentUniverse(exchange, pairs);
 
                 const allPairsCount = pairs.length;
-                if (whitelist.length > 0) {
-                    pairs = pairs.filter((p) => whitelisted.has(`${exchange}:${p.instrumentId}`));
-                }
+                pairs =
+                    whitelist.size > 0 ? pairs.filter((p) => whitelist.has(`${exchange}:${p.instrumentId}`)) : pairs;
 
                 for (const pair of pairs) {
                     const key = `${exchange}:${pair.instrumentId}`;
@@ -427,7 +422,7 @@ export default class OIService extends Tracker {
 
                 totalPairs += pairs.length;
                 this.logger.info(
-                    `${exchange}: ${pairs.length} pairs loaded${whitelist.length > 0 ? ` (filtered from ${allPairsCount})` : ''}`
+                    `${exchange}: ${pairs.length} pairs loaded${whitelist.size > 0 ? ` (filtered from ${allPairsCount})` : ''}`
                 );
                 await sleep(1500);
             } catch (error) {
@@ -438,7 +433,7 @@ export default class OIService extends Tracker {
         return totalPairs;
     }
 
-    private async refreshHyperliquidUniverse(): Promise<number> {
+    private async refreshHyperliquidUniverse(whitelist: Set<string>): Promise<number> {
         let totalPairs = 0;
 
         try {
@@ -446,15 +441,18 @@ export default class OIService extends Tracker {
             if (!meta || !meta.universe || !meta.assetMeta) {
                 throw new Error('Invalid Hyperliquid meta response');
             }
-            const snapshots = normalizeHLPerpContexts(meta);
-            const instruments = snapshots.map((snap) => ({
+            let pairs = normalizeHLPerpContexts(meta);
+            const instruments = pairs.map((snap) => ({
                 instrumentId: snap.instrumentId,
                 baseAsset: snap.baseAsset,
                 quoteAsset: 'USD' as const
             }));
             await DBService.upsertInstrumentUniverse('Hyperliquid', instruments);
 
-            for (const snap of snapshots) {
+            const allPairsCount = pairs.length;
+            pairs = whitelist.size > 0 ? pairs.filter((p) => whitelist.has(`Hyperliquid:${p.instrumentId}`)) : pairs;
+
+            for (const snap of pairs) {
                 const key = `Hyperliquid:${snap.instrumentId}`;
                 if (!this.pairStates.has(key)) {
                     this.pairStates.set(key, {
@@ -475,8 +473,10 @@ export default class OIService extends Tracker {
                 }
             }
 
-            totalPairs += snapshots.length;
-            this.logger.info(`Hyperliquid: ${snapshots.length} pairs loaded`);
+            totalPairs += pairs.length;
+            this.logger.info(
+                `Hyperliquid: ${pairs.length} pairs loaded${whitelist.size > 0 ? ` (filtered from ${allPairsCount})` : ''}`
+            );
         } catch (error) {
             this.logger.error(`Failed to refresh Hyperliquid: ${error}`);
         }
@@ -487,7 +487,14 @@ export default class OIService extends Tracker {
     private async refreshUniverse(): Promise<void> {
         this.logger.info('Refreshing token universe...');
 
-        const result = await Promise.all([this.refreshCoinglassUniverse(), this.refreshHyperliquidUniverse()]);
+        const whitelist = await DBService.getWhitelist();
+        const whitelistSet = new Set(whitelist.map((w) => `${w.exchange}:${w.instrumentId}`));
+        if (whitelist.length > 0) this.logger.info(`OI whitelisting: (${whitelist.length} tokens included)`);
+
+        const result = await Promise.all([
+            this.refreshCoinglassUniverse(whitelistSet),
+            this.refreshHyperliquidUniverse(whitelistSet)
+        ]);
         const totalPairs = result.reduce((sum, count) => sum + count, 0);
 
         if (totalPairs === 0) throw new Error(`No pairs detected for OI tracker`);
@@ -771,7 +778,7 @@ export default class OIService extends Tracker {
         const snapshotMap = new Map<string, HyperliquidOISnapshot>();
         for (const snap of snapshots) snapshotMap.set(snap.instrumentId, snap);
 
-        const intervalStart = normalizeIntervalStart(Date.now(), config.oi.hyperliquidIntervalMs);
+        const intervalStart = normalizeIntervalStart(Date.now(), config.oi.hlIntervalMs);
         const now = new Date();
 
         const observations: Array<{

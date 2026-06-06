@@ -258,7 +258,7 @@ export const config = {
         cusumDrift: 1, // CUSUM drift parameter k
 
         coinglassIntervalMs: 5 * 60 * 1000, // 5 minutes
-        hyperliquidIntervalMs: 15 * 60 * 1000, // 15 minutes
+        hlIntervalMs: 15 * 60 * 1000, // 15 minutes
         noDataTimeoutMs: 120 * 60 * 1000, // 2 hour
         scanStallTimeoutMs: 120 * 60 * 1000, // 2 hour
         cleanupTTLms: 5 * 24 * 60 * 60 * 1000 // 5 days

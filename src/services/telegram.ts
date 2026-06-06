@@ -153,8 +153,20 @@ export default class TelegramService {
                     `📈 Slow Accumulation: Σz > <b>${config.oi.cumulativeZThreshold}</b> (${config.oi.cumulativeZWindow} candles)`,
                     `🔥 Sustained Build: CUSUM > <b>${config.oi.cusumThreshold}</b>`,
                     `⏱ Cooldown: <b>${config.oi.cooldownSeconds / 3600}h</b>`,
-                    `🕐 Coinglass Scan interval: <b>${config.oi.coinglassIntervalMs / 60000}m</b>`,
-                    `🕐 Hyperliquid Scan interval: <b>${config.oi.hyperliquidIntervalMs / 60000}m</b>`
+                    `🕐 Coinglass Scan interval: <b>${config.oi.coinglassIntervalMs / 60000}m</b>`
+                ].join('\n')
+            },
+            {
+                tracker: CoinglassService.name,
+                chatId: config.telegram.hlOIChatID,
+                message: [
+                    `<b>🟢 Hyperliquid OI Anomaly Channel</b>`,
+                    ``,
+                    `⚡ Fast Spike: z > <b>${config.oi.zScoreThreshold}</b>`,
+                    `📈 Slow Accumulation: Σz > <b>${config.oi.cumulativeZThreshold}</b> (${config.oi.cumulativeZWindow} candles)`,
+                    `🔥 Sustained Build: CUSUM > <b>${config.oi.cusumThreshold}</b>`,
+                    `⏱ Cooldown: <b>${config.oi.cooldownSeconds / 3600}h</b>`,
+                    `🕐 Hyperliquid Scan interval: <b>${config.oi.hlIntervalMs / 60000}m</b>`
                 ].join('\n')
             }
         ];

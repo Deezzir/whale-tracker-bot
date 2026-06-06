@@ -984,8 +984,9 @@ export default class HyperliquidService extends Tracker {
                 }
             }
 
+            const timeTaken = ((Date.now() - batchStart) / 1000).toFixed(1);
             this.logger.info(
-                `Prefetch batch ${batchIndex}/${totalBatches} done in ${Date.now() - batchStart}ms: ${batchSuccess} ok, ${batchSkipped} skipped`
+                `Prefetch batch ${batchIndex}/${totalBatches} done in ${timeTaken}s: ${batchSuccess} ok, ${batchSkipped} skipped`
             );
             this.lastScanTimestamp = Date.now();
         }
