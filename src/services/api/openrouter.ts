@@ -49,7 +49,7 @@ export default class OpenRouterAPI {
     async classifyTrade(data: string): Promise<ClassificationSchema> {
         try {
             const result = await this.client.chat.send({
-                chatGenerationParams: {
+                chatRequest: {
                     responseFormat: {
                         type: 'json_schema',
                         jsonSchema: {
