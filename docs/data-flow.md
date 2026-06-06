@@ -126,7 +126,7 @@ Code owner: `src/services/trackers/oi.ts`
 - Watchdogs:
   - No data timeout.
   - Scan stall timeout.
-- Health callback in `src/index.ts` triggers alert + process shutdown on unhealthy state.
+- Health callback in `src/index.ts` always sends an owner alert on unhealthy state, and shuts down the process only when `RESTART_ON_UNHEALTHY=true`.
 
 ## Failure Semantics
 

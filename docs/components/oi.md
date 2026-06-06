@@ -43,18 +43,29 @@ OIService (tracker)
 
 ## Alert Format
 
-Alerts include an inline button linking to the exchange-specific OI chart on Coinalyze (`https://coinalyze.net/{coin}/{quote}/{exchange}/open-interest-chart/{pair}_perp_oi/`).
+Each alert carries two inline buttons:
 
-## Token Filtering
+- **📊 View OI on Coinalyze** — link to the Coinalyze OI chart (currently a static `https://coinalyze.net/` link).
+- **🚫 Blacklist** — callback `bl:<allowlistEntryId>` that removes the pair from the OI allowlist so it stops alerting (see Token Gating).
 
-- **Whitelist** (`COINGLASS_WHITELIST`): comma-separated tokens to track. When empty (default), all tokens from the configured exchanges are tracked.
-- The full universe is persisted to MongoDB regardless of the whitelist (for future expansion).
+Coinglass alerts route to `OI_CHAT_ID`; Hyperliquid OI alerts route to `OI_HS_CHAT_ID`.
+
+## Token Gating (Allowlist) and Blacklist
+
+The `OIWhitelistEntry` collection (keyed by `{exchange, instrumentId}`) is the **single source of truth** for which pairs alert:
+
+- During each scan cycle, every candidate pair is checked with `getWhitelistEntry(exchange, instrumentId)`. **Pairs not present in the allowlist are skipped** for both Coinglass and Hyperliquid sources.
+- The full instrument universe is still discovered and persisted to MongoDB (`ExchangeInstrumentUniverse`) regardless of the allowlist. `refreshCoinglassUniverse` only warms up pairs that are on the allowlist.
+- The allowlist is **seeded once** (e.g. `bun run src/test.ts`, optionally narrowed by a `COINGLASS_WHITELIST` env list of base assets). The periodic universe refresh deliberately does **not** re-seed it, so removals persist.
+- The **🚫 Blacklist** button (`bl:<allowlistEntryId>`) deletes the matching allowlist entry via `removeFromWhitelist`, narrowing the source-of-truth list and permanently suppressing that pair's alerts. The handler accepts the action from either the Coinglass (`OI_CHAT_ID`) or Hyperliquid (`OI_HS_CHAT_ID`) channel.
+
+> A fresh deployment with an empty `OIWhitelistEntry` collection emits no alerts until the allowlist is seeded.
 
 ## State Management
 
 - **In-memory**: `Map<string, PairStatisticalState>` for hot-path detection
 - **Redis**: cooldown keys with 6h TTL (`oi:cooldown:{exchange}:{instrumentId}`)
-- **MongoDB**: ExchangeInstrumentUniverse (universe), OIObservation (time-series history), OIAlertRecord (audit)
+- **MongoDB**: ExchangeInstrumentUniverse (universe), OIObservation (time-series history), OIAlertRecord (audit), OIWhitelistEntry (alerting allowlist)
 
 ## Cold Start Behavior
 

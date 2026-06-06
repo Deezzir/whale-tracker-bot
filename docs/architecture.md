@@ -90,7 +90,6 @@ Health is not only process liveness.
 ## Known Architectural Footguns
 
 - Config drift between docs/examples and runtime keys can break startup. Canonical source is `src/config.ts`.
-- `src/index.ts` includes one hardcoded extra Polymarket destination in tracker channel config.
 - Tracker `start()` calls are fire-and-forget; startup failures can be asynchronous.
 
 ## Where To Change What

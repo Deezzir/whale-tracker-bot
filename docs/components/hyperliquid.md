@@ -95,7 +95,7 @@ Common operations:
 
 ## Known Pitfalls
 
-- Topic ID configuration drift in docs can break startup; use `src/config.ts` names.
+- Chat ID configuration drift in docs can break startup; use `src/config.ts` names.
 - This service is stateful (in-memory batch and affected-keys map); always account for flush behavior when changing loops.
 - Re-alert logic depends on previous alert records per channel.
 

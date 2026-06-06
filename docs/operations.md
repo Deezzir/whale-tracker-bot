@@ -67,7 +67,7 @@ Symptom:
 Action:
 
 1. Compare runtime env with `src/config.ts` required keys.
-2. Fix naming drift issues (especially Hyperliquid topic IDs).
+2. Fix naming drift issues (especially Hyperliquid chat IDs).
 
 ### Bot unhealthy / repeated restarts
 
@@ -105,6 +105,18 @@ Action:
 1. Verify bot token/chat/topic IDs.
 2. Confirm bot admin permissions in target group.
 3. Check `checkMessageSource` constraints for command handlers.
+
+### No OI alerts at all
+
+Symptom:
+
+- OI scan cycles log scanned pairs, but no alerts reach `OI_CHAT_ID` / `OI_HS_CHAT_ID`.
+
+Action:
+
+1. Confirm the `OIWhitelistEntry` allowlist is seeded — both Coinglass and Hyperliquid scans skip any pair not present in it.
+2. A fresh deployment with an empty allowlist emits no alerts; the universe refresh does not auto-seed it.
+3. Verify pairs have completed warmup (see Hyperliquid note below for the direct source).
 
 ### Hyperliquid Direct OI Source
 

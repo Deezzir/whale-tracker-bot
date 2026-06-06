@@ -52,7 +52,8 @@ Create a `.env` file in the project root.
 | `OWNER_USER_ID` | Telegram user ID used for owner-level checks and watchdog alerts |
 | `OPENROUTER_API_KEY` | OpenRouter API key |
 | `COINGLASS_API_KEY` | CoinGlass API key (STARTUP plan) |
-| `COINGLASS_CHAT_ID` | Channel ID for CoinGlass OI anomaly alerts |
+| `OI_CHAT_ID` | Channel ID for CoinGlass OI anomaly alerts |
+| `OI_HS_CHAT_ID` | Channel ID for Hyperliquid OI anomaly alerts |
 
 ### Optional (with defaults)
 
@@ -99,7 +100,6 @@ Create a `.env` file in the project root.
 | `OPENROUTER_FAST_MODEL` | `gpt-3.5-turbo` | OpenRouter model used for fast classification |
 | `COINGLASS_EXCHANGES` | `Gate,Bybit,Binance,OKX,Kraken` | Comma-separated CoinGlass exchanges to monitor. Do not include `Hyperliquid` or `Aster`; they are managed by direct sources. |
 | `COINGLASS_REFRESH_INTERVAL_MS` | `3600000` | Token universe refresh interval (1h) |
-| `COINGLASS_WHITELIST` | `` | Comma-separated tokens to track exclusively (empty = track all) |
 | `COINGLASS_GAP_THRESHOLD_INTERVALS` | `3` | Missed 30m intervals before a pair enters DEGRADED_DATA |
 
 ## Run locally

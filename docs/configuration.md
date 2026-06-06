@@ -21,7 +21,8 @@ These are required at startup (`requireEnv(...)` in `src/config.ts`):
 - `OWNER_USER_ID`
 - `OPENROUTER_API_KEY`
 - `COINGLASS_API_KEY`
-- `COINGLASS_CHAT_ID`
+- `OI_CHAT_ID`
+- `OI_HS_CHAT_ID`
 
 ## Optional Environment Variables (Selected)
 
@@ -103,7 +104,6 @@ CoinGlass OI Anomaly Tracker:
 
 - `COINGLASS_EXCHANGES` (default: `Gate,Bybit,Binance,OKX,Kraken`; do not include `Hyperliquid` or `Aster`, which are managed by direct sources)
 - `COINGLASS_REFRESH_INTERVAL_MS` (default: `3600000` / 1h)
-- `COINGLASS_WHITELIST` (default: empty — comma-separated tokens; when set, only listed tokens are tracked)
 - `COINGLASS_GAP_THRESHOLD_INTERVALS` (default: `3` — missed intervals before a pair enters DEGRADED_DATA)
 - `OI_SCREENSHOT_ENABLED` (default: `true`)
 
@@ -142,7 +142,8 @@ Each alert branch routes to its own dedicated Telegram channel (no topics):
 | Tracked Wallets | `HS_TRACK_CHAT_ID` |
 | Stake | `STAKE_CHAT_ID` |
 | Polymarket | `POLY_CHAT_ID` |
-| CoinGlass OI | `COINGLASS_CHAT_ID` |
+| CoinGlass OI | `OI_CHAT_ID` |
+| Hyperliquid OI | `OI_HS_CHAT_ID` |
 
 ## Configuration Ownership Map
 
