@@ -28,6 +28,7 @@ interface PairStatisticalState {
     candleCount: number;
     status: PairStatus;
     source: OISource;
+    suppressPostGapDelta?: boolean;
 }
 
 interface HyperliquidOISnapshot {
@@ -104,21 +105,22 @@ function normalizeCoinglassIntervalStart(candleTimestamp: number): Date {
     return normalizeIntervalStart(normalizeCoinglassCandleTimestampMs(candleTimestamp), COINGLASS_CANDLE_INTERVAL_MS);
 }
 
-function detectCoinglassGap(state: PairStatisticalState, now: Date): boolean {
-    if (!state.lastObservationAt) return false;
-    const elapsed = now.getTime() - state.lastObservationAt.getTime();
+function isCoinglassDataStale(lastObservationAt: Date | null, now: Date): boolean {
+    if (!lastObservationAt) return false;
+    const elapsed = now.getTime() - lastObservationAt.getTime();
     const threshold = config.oi.coinglassGapThresholdIntervals * COINGLASS_CANDLE_INTERVAL_MS;
     return elapsed > threshold;
 }
 
+function detectCoinglassGap(state: PairStatisticalState, now: Date): boolean {
+    return isCoinglassDataStale(state.lastObservationAt, now);
+}
+
 function enterDegraded(state: PairStatisticalState): void {
     state.status = 'DEGRADED_DATA';
-    state.candleCount = 0;
     state.cusumScore = 0;
     state.recentZScores = [];
-    state.recentDeltaOI = [];
-    state.lastOI = null;
-    state.lastObservationAt = null;
+    state.suppressPostGapDelta = true;
 }
 
 interface OIAnomalyEvent {
@@ -515,6 +517,7 @@ export default class OIService extends Tracker {
         let localSeeded = 0;
 
         const needsExternal: [string, PairStatisticalState][] = [];
+        const backfillNow = new Date();
         for (const [key, state] of entries) {
             try {
                 const observations = await DBService.getRecentOIObservations(
@@ -522,7 +525,10 @@ export default class OIService extends Tracker {
                     state.instrumentId,
                     config.oi.warmupCandles
                 );
-                if (observations.length >= config.oi.warmupCandles) {
+                const newestAt = observations.length > 0 ? observations[observations.length - 1].intervalStart : null;
+                const stale = isCoinglassDataStale(newestAt, backfillNow);
+
+                if (observations.length >= config.oi.warmupCandles && !stale) {
                     this.replayDBHistory(
                         state,
                         observations.map((o) => ({ openInterest: o.openInterest, intervalStart: o.intervalStart }))
@@ -999,7 +1005,12 @@ export default class OIService extends Tracker {
     }
 
     private async evaluateCoinglassPair(state: PairStatisticalState): Promise<OIAnomalyEvent | null> {
-        const candles = await this.api.fetchOIHistory(state.exchange, state.instrumentId, this.defaultInterval, 1);
+        const candles = await this.api.fetchOIHistory(
+            state.exchange,
+            state.instrumentId,
+            this.defaultInterval,
+            config.oi.coinglassScanFetchLimit
+        );
 
         if (!candles) throw new Error(`Failed to fetch OI history for ${state.exchange}:${state.instrumentId}`);
 
@@ -1008,28 +1019,47 @@ export default class OIService extends Tracker {
             return null;
         }
 
+        const newCandles = candles.filter(
+            (c) =>
+                c.close > 0 &&
+                (!state.lastObservationAt ||
+                    normalizeCoinglassIntervalStart(c.time).getTime() > state.lastObservationAt.getTime())
+        );
+
+        if (newCandles.length === 0) return null;
+
         if (state.status === 'DEGRADED_DATA' && state.candleCount >= config.oi.warmupCandles) {
             state.status = 'READY';
-            this.logger.debug(`Pair recovered: ${state.exchange}:${state.instrumentId} re-warmup complete, now READY`);
+            this.logger.debug(`Pair recovered: ${state.exchange}:${state.instrumentId} re-warmed, now READY`);
         }
 
-        const latestCandle = candles[candles.length - 1];
-        if (!(latestCandle.close > 0)) return null;
-        const intervalStart = normalizeCoinglassIntervalStart(latestCandle.time);
-
-        if (state.lastObservationAt && state.lastObservationAt.getTime() === intervalStart.getTime()) return null;
-
-        const observation = this.buildCoinglassObservation(state, latestCandle, intervalStart);
+        const observations = newCandles.map((c) =>
+            this.buildCoinglassObservation(state, c, normalizeCoinglassIntervalStart(c.time))
+        );
         try {
-            await DBService.upsertOIObservations([observation]);
+            await DBService.upsertOIObservations(observations);
         } catch (error) {
-            this.logger.error(`Failed to persist observation for ${state.exchange}:${state.instrumentId}: ${error}`);
+            this.logger.error(`Failed to persist observations for ${state.exchange}:${state.instrumentId}: ${error}`);
         }
 
         this.lastDataTimestamp = Date.now();
 
-        updatePairState(state, latestCandle.close);
-        state.lastObservationAt = intervalStart;
+        const suppress = state.suppressPostGapDelta;
+        if (suppress) {
+            state.suppressPostGapDelta = false;
+            state.lastOI = null;
+        }
+
+        for (const c of newCandles) {
+            updatePairState(state, c.close);
+            state.lastObservationAt = normalizeCoinglassIntervalStart(c.time);
+        }
+
+        if (suppress) {
+            state.cusumScore = 0;
+            return null;
+        }
+
         const detection = detectAnomaly(state);
         if (!detection) return null;
 
