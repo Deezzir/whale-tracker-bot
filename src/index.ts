@@ -11,10 +11,8 @@ import Tg from './services/telegram';
 import { closeRedis, connectRedis } from './services/redis';
 import { Tracker } from './common/tracker';
 import { config } from './config';
-import * as utils from './common/utils';
-import { HyperTradeDirection } from './services/db';
-import { Context } from 'telegraf';
 import HealthService from './healthz';
+import { registerHyperliquidHandlers, registerOIHandlers } from './handlers';
 
 const logger = new Logger('Main');
 const telegram: Tg = new Tg();
@@ -71,7 +69,8 @@ function getEnabledTrackers(): Tracker[] {
                     services.push(
                         new OIService(
                             telegram,
-                            [{ chatId: config.telegram.coinglassChatId }],
+                            [{ chatId: config.telegram.oiChatID }],
+                            [{ chatId: config.telegram.hsOIChatID }],
                             config.oi.screenshotEnabled
                         )
                     );
@@ -84,122 +83,20 @@ function getEnabledTrackers(): Tracker[] {
     return services;
 }
 
-async function extractTrackData(
-    ctx: (Context & { match: RegExpMatchArray | null }) | (Context & { args: string[] }),
-    command: string
-): Promise<{ wallet: string; coin: string; direction: HyperTradeDirection } | null> {
-    let direction: string;
-    let coin: string;
-    let wallet: string;
-
-    if ('args' in ctx) {
-        const args = ctx.args;
-        if (args.length !== 3) {
-            await ctx.reply(`Usage: /${command} <wallet> <coin> <long|short>`);
-            return null;
-        }
-        wallet = args[0];
-        coin = args[1].toUpperCase();
-        direction = args[2];
-    } else if ('match' in ctx && ctx.match) {
-        if (ctx.match.length !== 4) {
-            await ctx.reply('Invalid untrack command format.');
-            return null;
-        }
-        wallet = ctx.match[1];
-        coin = ctx.match[2].toUpperCase();
-        direction = ctx.match[3];
-    } else {
-        await ctx.reply('Invalid command format.');
-        return null;
-    }
-
-    if (!utils.isValidHyperliquidAddress(wallet)) {
-        await ctx.reply(`Invalid Hyperliquid wallet address: '${wallet}'`);
-        return null;
-    }
-    if (!utils.isValidCoinSymbol(coin)) {
-        await ctx.reply(`Invalid coin symbol: '${coin}'`);
-        return null;
-    }
-    if (direction !== 'short' && direction !== 'long') {
-        await ctx.reply(`Invalid order direction: '${direction}'. Use 'long' or 'short'.`);
-        return null;
-    }
-    return { wallet, coin, direction: direction as HyperTradeDirection };
-}
-
-telegram.registerHandlers((bot) => {
+telegram.registerHandlers((tg) => {
     const hl = services.find((s) => s instanceof HyperliquidService) as HyperliquidService | undefined;
-    if (!hl) {
+    if (hl) {
+        registerHyperliquidHandlers(tg, hl);
+    } else {
         logger.warn('HyperliquidService is not enabled, /track and /untrack commands will be unavailable');
-        return;
     }
 
-    bot.command('stats', async (ctx) => {
-        if (!(await telegram.checkMessageSource(ctx, false))) return;
-        const args = ctx.args;
-        if (args.length !== 1) {
-            await ctx.reply('Usage: /stats <coin>');
-            return;
-        }
-        const coin = args[0].toUpperCase();
-        if (!utils.isValidCoinSymbol(coin)) {
-            await ctx.reply(`Invalid coin symbol: '${coin}'`);
-            return;
-        }
-        const msg = await hl.getCoinStats(coin);
-        await ctx.reply(msg, { parse_mode: 'HTML' });
-    });
-
-    bot.command('tracked', async (ctx) => {
-        if (!(await telegram.checkMessageSource(ctx, false))) return;
-        const msg = await hl.listTracked();
-        await ctx.reply(msg, { parse_mode: 'HTML' });
-    });
-
-    bot.command('untrack', async (ctx) => {
-        if (!(await telegram.checkMessageSource(ctx, false))) return;
-        const trackData = await extractTrackData(ctx, 'untrack');
-        if (!trackData) return;
-        const { wallet, coin, direction } = trackData;
-        const msg = await hl.untrack(wallet, coin, direction as HyperTradeDirection);
-        await ctx.reply(msg, { parse_mode: 'HTML' });
-    });
-
-    bot.command('track', async (ctx) => {
-        if (!(await telegram.checkMessageSource(ctx, false))) return;
-        const trackData = await extractTrackData(ctx, 'track');
-        if (!trackData) return;
-        const { wallet, coin, direction } = trackData;
-        const msg = await hl.track(wallet, coin, direction as HyperTradeDirection);
-        await ctx.reply(msg, { parse_mode: 'HTML' });
-    });
-
-    bot.action(/^track:(.+)$/, async (ctx) => {
-        if (!(await telegram.checkMessageSource(ctx, false))) return;
-        if (!ctx.match || ctx.match.length !== 2) {
-            await ctx.answerCbQuery('Invalid untrack command format.');
-            return;
-        }
-        const { msg, buttons } = await hl.trackById(ctx.match[1]);
-        await ctx.answerCbQuery();
-        await ctx.reply(msg, { parse_mode: 'HTML' });
-        if (buttons) await ctx.editMessageReplyMarkup(buttons);
-        await telegram.sendMessage(config.telegram.hsTrackChatID, msg);
-    });
-
-    bot.action(/^untrack:(.+)$/, async (ctx) => {
-        if (!(await telegram.checkMessageSource(ctx, false))) return;
-        if (!ctx.match || ctx.match.length !== 2) {
-            await ctx.answerCbQuery('Invalid untrack command format.');
-            return;
-        }
-        const { msg, buttons } = await hl.untrackById(ctx.match[1]);
-        await ctx.answerCbQuery(msg);
-        await ctx.reply(msg, { parse_mode: 'HTML' });
-        if (buttons) await ctx.editMessageReplyMarkup(buttons);
-    });
+    const oi = services.find((s) => s instanceof OIService) as OIService | undefined;
+    if (oi) {
+        registerOIHandlers(tg, oi);
+    } else {
+        logger.warn('OIService is not enabled, OI-related commands will be unavailable');
+    }
 });
 
 function startMonitoringServices(): void {

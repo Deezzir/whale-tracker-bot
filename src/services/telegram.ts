@@ -15,17 +15,17 @@ interface SendMessageOptions {
 
 export default class TelegramService {
     private bot: Telegraf;
-    private handlerRegistrar?: (bot: Telegraf) => void;
+    private handlerRegistrar?: (tg: TelegramService) => void;
     private allChatIDs: number[];
 
     constructor() {
         this.bot = new Telegraf(config.telegram.botToken);
         this.allChatIDs = Object.entries(config.telegram)
-            .filter(([key, value]) => key.endsWith('ChatID') && typeof value === 'number')
+            .filter(([key, value]) => key.toLowerCase().endsWith('chatid') && typeof value === 'number')
             .map(([, value]) => value as number);
     }
 
-    public registerHandlers(fn: (bot: Telegraf) => void): void {
+    public registerHandlers(fn: (tg: TelegramService) => void): void {
         this.handlerRegistrar = fn;
     }
 
@@ -34,7 +34,7 @@ export default class TelegramService {
             throw new Error('Handlers must be registered via registerHandlers() before starting TelegramService.');
         }
         this.registerInternalHandlers();
-        this.handlerRegistrar(this.bot);
+        this.handlerRegistrar(this);
         await this.ensureBotReady();
         await this.bot.launch(() => {
             startCallback();
@@ -144,7 +144,7 @@ export default class TelegramService {
             },
             {
                 tracker: CoinglassService.name,
-                chatId: config.telegram.coinglassChatId,
+                chatId: config.telegram.oiChatID,
                 message: [
                     `<b>🟢 CoinGlass OI Anomaly Channel</b>`,
                     ``,
@@ -231,16 +231,19 @@ export default class TelegramService {
         extra?: SendMessageOptions
     ): Promise<number> {
         const MAX_RETRIES = 3;
-        return retry(
+        const TELEGRAM_CAPTION_LIMIT = 1024;
+        const oversized = caption.length > TELEGRAM_CAPTION_LIMIT;
+
+        const photoMessageId = await retry(
             async () => {
                 const inputFile: InputFile = {
                     source: photo,
                     filename: `photo_${Date.now()}.jpg`
                 };
                 const msg = await this.bot.telegram.sendPhoto(chatID, inputFile, {
-                    caption,
-                    parse_mode: 'HTML',
-                    reply_markup: extra?.reply_markup,
+                    caption: oversized ? undefined : caption,
+                    parse_mode: oversized ? undefined : 'HTML',
+                    reply_markup: oversized ? undefined : extra?.reply_markup,
                     message_thread_id: extra?.message_thread_id
                 });
                 return msg.message_id;
@@ -248,6 +251,15 @@ export default class TelegramService {
             { attempts: MAX_RETRIES },
             logger
         );
+
+        if (oversized) {
+            await this.sendReply(chatID, caption, photoMessageId, {
+                reply_markup: extra?.reply_markup,
+                message_thread_id: extra?.message_thread_id
+            });
+        }
+
+        return photoMessageId;
     }
 
     public async sendReply(
@@ -272,7 +284,7 @@ export default class TelegramService {
         );
     }
 
-    public async checkMessageSource(ctx: Context, requireOwner: boolean): Promise<boolean> {
+    public async checkMessageSource(ctx: Context, chatID: number | number[], requireOwner: boolean): Promise<boolean> {
         if (!ctx.chat || !ctx.from) {
             await ctx.reply('Unable to determine chat or user information.');
             return false;
@@ -281,19 +293,20 @@ export default class TelegramService {
             await ctx.reply('The bot is only available in the group.');
             return false;
         }
-        if (!this.allChatIDs.includes(ctx.chat.id)) {
+        const allowedChatIDs = Array.isArray(chatID) ? chatID : [chatID];
+        if (!allowedChatIDs.includes(ctx.chat.id)) {
             await ctx.reply('This command can only be used in the target groups.');
             return false;
         }
         const member = await this.bot.telegram.getChatMember(ctx.chat.id, ctx.from.id);
         if (member.status !== 'administrator' && member.status !== 'creator') {
             if (!config.telegram.ownerUserID || ctx.from.id !== config.telegram.ownerUserID) {
-                await ctx.reply('Only group administrators can control monitoring.');
+                await ctx.reply('Only group administrators can control this.');
                 return false;
             }
         }
         if (requireOwner && ctx.from.id !== config.telegram.ownerUserID) {
-            await ctx.reply('Only the bot owner can control monitoring.');
+            await ctx.reply('Only the bot owner can control this.');
             return false;
         }
         return true;

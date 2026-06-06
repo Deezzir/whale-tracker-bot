@@ -1,10 +1,12 @@
-import { Tracker } from '../../common/tracker';
+import { ChatChannel, Tracker } from '../../common/tracker';
 import { config } from '../../config';
+import { Markup } from 'telegraf';
 import APIService, { Interval, OICandle } from '../api/coinglass';
 import DBService, { TriggerType, Severity } from '../db/oi';
 import { getRedisClient } from '../redis';
 import { sleep } from '../../common/utils';
 import { InlineKeyboardMarkup } from 'telegraf/types';
+import Tg from '../telegram';
 import HyperliquidAPI, { PerpsMeta } from '../api/hyperliquid';
 
 const COINGLASS_CANDLE_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
@@ -271,6 +273,14 @@ export default class OIService extends Tracker {
     private hlApi = new HyperliquidAPI();
     private pairStates = new Map<string, PairStatisticalState>();
     private defaultInterval: Interval = '30m';
+    private oiChannels: ChatChannel[];
+    private hlOIChannels: ChatChannel[];
+
+    constructor(tg: Tg, oiChannels: ChatChannel[], hsOIChannels: ChatChannel[], screenshotEnabled = false) {
+        super(tg, [], screenshotEnabled);
+        this.oiChannels = oiChannels;
+        this.hlOIChannels = hsOIChannels;
+    }
 
     async start(): Promise<void> {
         if (this.running) return;
@@ -289,6 +299,22 @@ export default class OIService extends Tracker {
         this.monitorTask = undefined;
         await this.screenshoter.stop();
         this.logger.info('Monitoring stopped');
+    }
+
+    async blacklistById(id: string): Promise<{ msg: string; success: boolean }> {
+        try {
+            const entry = await DBService.getWhitelistEntryById(id);
+            if (!entry) return { msg: `No entry found with ID ${id}.`, success: false };
+
+            await DBService.removeFromWhitelist(entry.exchange, entry.instrumentId);
+            return {
+                msg: `Blacklisted ${entry.exchange}:${entry.instrumentId} successfully.`,
+                success: true
+            };
+        } catch (error) {
+            this.logger.error(`Failed to blacklist ${id}: ${error}`);
+            return { msg: `An error occurred while blacklisting ${id}. Please try again later.`, success: false };
+        }
     }
 
     private async mainLoop(): Promise<void> {
@@ -361,7 +387,8 @@ export default class OIService extends Tracker {
     }
 
     private async refreshCoinglassUniverse(): Promise<number> {
-        const whitelist = config.oi.tokenWhitelist;
+        const whitelist = await DBService.getWhitelist();
+        const whitelisted = new Set(whitelist.map((w) => `${w.exchange}:${w.instrumentId}`));
         let totalPairs = 0;
 
         if (whitelist.length > 0) this.logger.info(`Coinglass whitelisting: (${whitelist.length} tokens included)`);
@@ -374,7 +401,7 @@ export default class OIService extends Tracker {
 
                 const allPairsCount = pairs.length;
                 if (whitelist.length > 0) {
-                    pairs = pairs.filter((p) => whitelist.includes(p.baseAsset.toUpperCase()));
+                    pairs = pairs.filter((p) => whitelisted.has(`${exchange}:${p.instrumentId}`));
                 }
 
                 for (const pair of pairs) {
@@ -794,16 +821,20 @@ export default class OIService extends Tracker {
             });
         }
 
-        if (observations.length > 0) {
-            stored = await DBService.upsertOIObservations(observations);
-        }
+        if (observations.length > 0) stored = await DBService.upsertOIObservations(observations);
 
         for (const [pairKey, state] of hlPairs) {
-            if (!this.running) break;
-            const snap = snapshotMap.get(state.instrumentId);
-            if (!snap || snap.isDelisted || snap.openInterest <= 0) continue;
-
             try {
+                if (!this.running) break;
+                const snap = snapshotMap.get(state.instrumentId);
+                if (!snap || snap.isDelisted || snap.openInterest <= 0) continue;
+
+                const whitelistEntry = await DBService.getWhitelistEntry(state.exchange, state.instrumentId);
+                if (!whitelistEntry) {
+                    this.logger.debug(`Hyperliquid pair ${pairKey} is not whitelisted, skipping anomaly detection`);
+                    continue;
+                }
+
                 const prevStatus = state.status;
                 if (state.status === 'DEGRADED_DATA' && state.candleCount >= config.oi.warmupCandles) {
                     state.status = 'READY';
@@ -822,10 +853,14 @@ export default class OIService extends Tracker {
                     state.cusumScore = 0;
                     this.lastDataTimestamp = Date.now();
 
-                    await this.sendAlert({
-                        ...detection,
-                        detectedAt: new Date()
-                    });
+                    await this.sendAlert(
+                        {
+                            ...detection,
+                            detectedAt: new Date(),
+                            pairEntryId: whitelistEntry.id
+                        },
+                        this.hlOIChannels
+                    );
                 }
             } catch (error) {
                 this.logger.error(`Error evaluating Hyperliquid pair ${pairKey}: ${error}`);
@@ -892,6 +927,12 @@ export default class OIService extends Tracker {
                 const prevStatus = state.status;
 
                 try {
+                    const whitelistEntry = await DBService.getWhitelistEntry(state.exchange, state.instrumentId);
+                    if (!whitelistEntry) {
+                        this.logger.debug(`${state.exchange} ${pairKey} is not whitelisted, skipping evaluation`);
+                        continue;
+                    }
+
                     const anomaly = await this.evaluateCoinglassPair(state);
                     scanned++;
                     const stats = exchangeStats.get(state.exchange) || { scanned: 0, failed: 0 };
@@ -904,7 +945,7 @@ export default class OIService extends Tracker {
 
                     if (anomaly) {
                         anomaliesDetected++;
-                        await this.sendAlert(anomaly);
+                        await this.sendAlert({ ...anomaly, pairEntryId: whitelistEntry.id }, this.oiChannels);
                     }
                 } catch (error) {
                     failed++;
@@ -993,7 +1034,7 @@ export default class OIService extends Tracker {
         };
     }
 
-    private async sendAlert(event: OIAnomalyEvent): Promise<void> {
+    private async sendAlert(event: OIAnomalyEvent & { pairEntryId: string }, channels: ChatChannel[]): Promise<void> {
         const redis = getRedisClient();
         const cooldownKey = `oi:cooldown:${event.exchange}:${event.instrumentId}`;
 
@@ -1057,9 +1098,9 @@ export default class OIService extends Tracker {
             }
         }
 
-        for (let i = 0; i < this.channels.length; i++) {
+        for (let i = 0; i < channels.length; i++) {
             if (i > 0) await sleep(1000);
-            const channel = this.channels[i];
+            const channel = channels[i];
             try {
                 let messageId: number | undefined;
                 if (screenshot) {
@@ -1087,7 +1128,9 @@ export default class OIService extends Tracker {
         }
     }
 
-    private formatAlertMessage(event: OIAnomalyEvent): { msg: string; buttons: InlineKeyboardMarkup } | null {
+    private formatAlertMessage(
+        event: OIAnomalyEvent & { pairEntryId: string }
+    ): { msg: string; buttons: InlineKeyboardMarkup } | null {
         const severityEmoji = event.severity === 'CRITICAL' ? '🚨' : '⚠️';
         const triggerLabel = {
             FAST_SPIKE: '⚡ Fast Spike',
@@ -1113,7 +1156,10 @@ export default class OIService extends Tracker {
         return {
             msg: lines.join('\n'),
             buttons: {
-                inline_keyboard: [[{ text: '📊 View OI on Coinalyze', url: 'https://coinalyze.net/' }]]
+                inline_keyboard: [
+                    [{ text: '📊 View OI on Coinalyze', url: 'https://coinalyze.net/' }],
+                    [Markup.button.callback('🚫 Blacklist', `bl:${event.pairEntryId}`, true)]
+                ]
             }
         };
     }

@@ -97,7 +97,8 @@ export const config = {
         hsFreshWalletChatID: parseInt(requireEnv('HS_FRESH_WALLET_CHAT_ID'), 10),
         hsWhaleActivityChatID: parseInt(requireEnv('HS_WHALE_ACTIVITY_CHAT_ID'), 10),
         stakeChatID: parseInt(requireEnv('STAKE_CHAT_ID'), 10),
-        coinglassChatId: parseInt(requireEnv('COINGLASS_CHAT_ID'), 10),
+        oiChatID: parseInt(requireEnv('OI_CHAT_ID'), 10),
+        hsOIChatID: parseInt(requireEnv('OI_HS_CHAT_ID'), 10),
         polyChatID: parseInt(requireEnv('POLY_CHAT_ID'), 10),
         ownerUserID: parseInt(requireEnv('OWNER_USER_ID'), 10)
     },
@@ -241,9 +242,6 @@ export const config = {
         coinglassExchanges: parseCoinglassExchanges(
             process.env['COINGLASS_EXCHANGES'] || 'Gate,Bybit,Binance,OKX,Kraken'
         ),
-        tokenWhitelist: process.env['COINGLASS_WHITELIST']
-            ? process.env['COINGLASS_WHITELIST'].split(',').map((t) => t.trim().toUpperCase())
-            : [],
         refreshIntervalMs: parseInt(optionalEnv('COINGLASS_REFRESH_INTERVAL_MS', '3600000'), 10),
         coinglassGapThresholdIntervals: parseInt(optionalEnv('COINGLASS_GAP_THRESHOLD_INTERVALS', '3'), 10),
         screenshotEnabled: optionalEnv('OI_SCREENSHOT_ENABLED', 'true') === 'true',
