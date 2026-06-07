@@ -30,7 +30,10 @@ export default class Logger {
     }
 
     private formatTimestamp(): string {
-        return new Date().toISOString();
+        const date = new Date();
+        const offsetMs = date.getTimezoneOffset() * 60 * 1000;
+        const localDate = new Date(date.getTime() - offsetMs);
+        return localDate.toISOString().slice(0, -1);
     }
 
     private log(level: LogLevel, module: string, message: string, data?: unknown): void {
