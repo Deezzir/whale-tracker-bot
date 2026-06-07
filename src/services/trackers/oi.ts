@@ -133,6 +133,7 @@ interface OIAnomalyEvent {
     currentOI: number;
     deltaOI: number;
     deltaOIPercent: number;
+    deltaOITokens?: number;
     severity: Severity;
     detectedAt: Date;
 }
@@ -283,6 +284,7 @@ function finalizeAnomalyUsd(
 
     return {
         ...candidate,
+        deltaOITokens: candidate.deltaOI,
         previousOI: previousOIUsd,
         currentOI: currentOIUsd,
         deltaOI: deltaOIUsd
@@ -1133,7 +1135,7 @@ export default class OIService extends Tracker {
             const query = `${event.baseAsset} ${event.exchange} open interest`;
             try {
                 screenshot = await this.screenshoter.capture(
-                    `https://coinalyze.net/`,
+                    `https://coinalyze.net`,
                     'div[id="chart-elm"]',
                     undefined,
                     async (page) => {
@@ -1216,18 +1218,33 @@ export default class OIService extends Tracker {
 
         const fmtOI = (n: number) =>
             n >= 1_000_000 ? `$${(n / 1_000_000).toFixed(2)}M` : `$${(n / 1_000).toFixed(1)}K`;
+        const fmtTokens = (n: number) =>
+            n >= 1_000_000
+                ? `${(n / 1_000_000).toFixed(3)}M`
+                : n >= 1_000
+                  ? `${(n / 1_000).toFixed(2)}K`
+                  : n.toFixed(0);
+        const pct = `${event.deltaOIPercent >= 0 ? '+' : ''}${event.deltaOIPercent.toFixed(1)}%`;
+        const tokenDeltaLine =
+            event.deltaOITokens !== undefined
+                ? `🧮 Token Delta: <b>${event.deltaOITokens >= 0 ? '+' : ''}${fmtTokens(event.deltaOITokens)}</b>`
+                : null;
 
         const lines: string[] = [
-            `${severityEmoji} <b>OI Anomaly: ${event.severity}</b>`,
+            `${severityEmoji} <b>OI Anomaly • ${event.severity} • ${triggerLabel}</b>`,
+            `🪙 <b>${event.baseAsset}</b> • ${event.exchange}`,
             ``,
-            `<b>${triggerLabel}</b>`,
-            `🪙 <b>${event.baseAsset}</b> on <b>${event.exchange}</b>`,
-            ``,
-            `📊 OI: ${fmtOI(event.previousOI)} → ${fmtOI(event.currentOI)} (<b>${event.deltaOIPercent >= 0 ? '+' : ''}${event.deltaOIPercent.toFixed(1)}%</b>)`,
-            `📏 Trigger: ${event.triggerValue.toFixed(2)} (threshold: ${this.getThresholdForType(event.triggerType)})`
+            `📊 OI (USD): <b>${fmtOI(event.previousOI)} → ${fmtOI(event.currentOI)}</b>`,
+            `📈 Change: <b>${pct}</b>`
         ];
 
-        lines.push(``, `🕐 ${event.detectedAt.toISOString().replace('T', ' ').slice(0, 19)} UTC`);
+        if (tokenDeltaLine) lines.push(tokenDeltaLine);
+
+        lines.push(
+            `📏 Trigger: <b>${event.triggerValue.toFixed(2)}</b> (threshold: ${this.getThresholdForType(event.triggerType)})`,
+            ``,
+            `🕐 ${event.detectedAt.toISOString().replace('T', ' ').slice(0, 19)} UTC`
+        );
 
         return {
             msg: lines.join('\n'),
