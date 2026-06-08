@@ -9,7 +9,8 @@ import DBService, {
     HyperTrackedRecord,
     HyperTradeDirection,
     HyperTradeRecord,
-    PositionKey
+    PositionKey,
+    isSpotDirection
 } from '../db/hyperliquid';
 import APIService, { AssetPosition, PortfolioResponse as TraderPortfolio, TraderState } from '../api/hyperliquid';
 
@@ -112,8 +113,8 @@ interface WsTrade {
     users: [string, string];
 }
 
-function isSpot(direction: HyperTradeDirection): boolean {
-    return direction === 'spot';
+function isSpotSellDirection(direction: HyperTradeDirection): boolean {
+    return direction === 'spot_sell';
 }
 
 interface AlertContext {
@@ -414,8 +415,8 @@ export default class HyperliquidService extends Tracker {
         const keysToScan = Array.from(this.affectedKeys.values());
         this.affectedKeys.clear();
 
-        const perpKeys = keysToScan.filter((k) => !isSpot(k.direction));
-        const spotKeys = keysToScan.filter((k) => isSpot(k.direction));
+        const perpKeys = keysToScan.filter((k) => !isSpotDirection(k.direction));
+        const spotKeys = keysToScan.filter((k) => isSpotDirection(k.direction));
 
         const perpCandidates =
             perpKeys.length > 0
@@ -454,7 +455,7 @@ export default class HyperliquidService extends Tracker {
                     this.logger.debug(`No prefetched data for wallet ${candidate.wallet}, skipping`);
                     continue;
                 }
-                if (isSpot(candidate.direction)) {
+                if (isSpotDirection(candidate.direction)) {
                     await this.processSpotAlertCandidate(candidate, data.portfolio, data.state);
                 } else {
                     await this.processAlertCandidate(candidate, data.portfolio, data.state);
@@ -775,16 +776,16 @@ export default class HyperliquidService extends Tracker {
                     coin: displayCoin,
                     notional,
                     tradeTime: trade.time,
-                    direction: 'spot'
+                    direction: 'spot_buy'
                 });
             }
             if (seller && !isZeroAddress(seller)) {
                 this.tradeBatch.push({
                     wallet: seller,
                     coin: displayCoin,
-                    notional: -notional,
+                    notional,
                     tradeTime: trade.time,
-                    direction: 'spot'
+                    direction: 'spot_sell'
                 });
             }
         } else {
@@ -1183,22 +1184,26 @@ export default class HyperliquidService extends Tracker {
         );
 
         const alertChannels = this.getChannelsForBranch('BIG_TWAP');
-        const positionState = state.spot!.balances.find((pos) => pos.coin === candidate.coin.split('/')[0]);
-        if (!positionState) {
-            this.logger.debug(`Skipping spot (no position): ${candidate.wallet} ${candidate.coin}`);
-            return;
-        }
+        const isSell = isSpotSellDirection(candidate.direction);
 
-        const upstreamTotalNotional = parseFloat(positionState.total) * parseFloat(positionState.px);
-        if (upstreamTotalNotional < config.hyperliquid.minSpotNotionalUSD) {
-            this.logger.debug(
-                `Skipping spot (upstream notional too low): ${candidate.wallet} ${candidate.coin} ${formatCurrency(upstreamTotalNotional)}`
-            );
-            return;
-        }
+        if (!isSell) {
+            const positionState = state.spot!.balances.find((pos) => pos.coin === candidate.coin.split('/')[0]);
+            if (!positionState) {
+                this.logger.debug(`Skipping spot (no position): ${candidate.wallet} ${candidate.coin}`);
+                return;
+            }
 
-        candidate.totalNotional = upstreamTotalNotional;
-        await DBService.updateTradeNotional(candidate.id, candidate.totalNotional);
+            const upstreamTotalNotional = parseFloat(positionState.total) * parseFloat(positionState.px);
+            if (upstreamTotalNotional < config.hyperliquid.minSpotNotionalUSD) {
+                this.logger.debug(
+                    `Skipping spot (upstream notional too low): ${candidate.wallet} ${candidate.coin} ${formatCurrency(upstreamTotalNotional)}`
+                );
+                return;
+            }
+
+            candidate.totalNotional = upstreamTotalNotional;
+            await DBService.updateTradeNotional(candidate.id, candidate.totalNotional);
+        }
 
         const isTwap = this.detectTwap(candidate);
         const branch: AlertBranch | null = isTwap ? 'BIG_TWAP' : null;
@@ -1235,7 +1240,11 @@ export default class HyperliquidService extends Tracker {
                 return;
             }
 
-            const replyText = this.formatGrowingPositionMessage(candidate.totalNotional, latestAlert.totalNotional);
+            const replyText = this.formatGrowingPositionMessage(
+                candidate.totalNotional,
+                latestAlert.totalNotional,
+                isSell ? '🔥 <b>Selling more</b>' : '🔥 <b>Growing position</b>'
+            );
             for (let i = 0; i < alertChannels.length; i++) {
                 if (i > 0) await sleep(1000);
                 const channel = alertChannels[i];
@@ -1420,7 +1429,10 @@ export default class HyperliquidService extends Tracker {
         const notionalPctOfMcap = marketCap > 0 ? (candidate.totalNotional / marketCap) * 100 : 0;
         const otherPositions = getTopPositions(state.perp!.assetPositions || [], '', 3);
 
-        const dirIcon = '🟢';
+        const isSell = isSpotSellDirection(candidate.direction);
+        const dirIcon = isSell ? '🔴' : '🟢';
+        const actionWord = isSell ? 'selling' : 'buying';
+        const sideBlock = isSell ? '🟥' : '🟩';
         const durationStr =
             durationMinutes >= 60
                 ? `${Math.floor(durationMinutes / 60)}h ${durationMinutes % 60}m`
@@ -1431,7 +1443,7 @@ export default class HyperliquidService extends Tracker {
         const lines = [
             '🔄 <b>BIG TWAP DETECTED</b> 🔄',
             '',
-            `${dirIcon} <code>${formatCurrency(candidate.totalNotional)}</code> buying <b>${escapeHtml(coinBase)}</b> in ${durationStr} 🟩`,
+            `${dirIcon} <code>${formatCurrency(candidate.totalNotional)}</code> ${actionWord} <b>${escapeHtml(coinBase)}</b> in ${durationStr} ${sideBlock}`,
             `~<code>${formatCurrency(perCycleAmount)}</code> every ${cycleIntervalStr}`,
             '',
             `σ: ${sigma.toFixed(2)}%  ·  Intensity: ${intensity.toFixed(2)}x`,
@@ -1610,12 +1622,12 @@ export default class HyperliquidService extends Tracker {
         };
     }
 
-    private formatGrowingPositionMessage(currentNotional: number, previousNotional: number): string {
-        const lines = [
-            `🔥 <b>Growing position</b>`,
-            ``,
-            `<b>${formatCurrency(currentNotional)}</b>  ⬅  ${formatCurrency(previousNotional)}`
-        ];
+    private formatGrowingPositionMessage(
+        currentNotional: number,
+        previousNotional: number,
+        title = '🔥 <b>Growing position</b>'
+    ): string {
+        const lines = [title, ``, `<b>${formatCurrency(currentNotional)}</b>  ⬅  ${formatCurrency(previousNotional)}`];
         return lines.join('\n');
     }
 

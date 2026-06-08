@@ -3,8 +3,11 @@ import Logger from '../../common/logger';
 
 const logger = new Logger('HyperliquidDB');
 
-// Hyperliquid wallet aggregation schema
-export type HyperTradeDirection = 'long' | 'short' | 'spot';
+export type HyperTradeDirection = 'long' | 'short' | 'spot_buy' | 'spot_sell';
+
+export function isSpotDirection(direction: HyperTradeDirection): boolean {
+    return direction === 'spot_buy' || direction === 'spot_sell';
+}
 
 export interface TradeSnapshot {
     ts: number;
@@ -31,7 +34,7 @@ const HyperAggregationSchema = new Schema<HyperAggregationDocument>(
         wallet: { type: String, required: true },
         coin: { type: String, required: true },
         dateKey: { type: String, required: true },
-        direction: { type: String, required: true, enum: ['long', 'short', 'spot'] },
+        direction: { type: String, required: true, enum: ['long', 'short', 'spot_buy', 'spot_sell'] },
         totalNotional: { type: Number, default: 0 },
         tradeCount: { type: Number, default: 0 },
         lastTradeTime: { type: Number, default: 0 },
@@ -67,7 +70,7 @@ const HyperTrackedSchema = new Schema<HyperTrackedDocument>(
         wallet: { type: String, required: true, unique: true },
         coin: { type: String, required: true },
         totalNotional: { type: Number, default: 0 },
-        direction: { type: String, required: true, enum: ['long', 'short', 'spot'] },
+        direction: { type: String, required: true, enum: ['long', 'short', 'spot_buy', 'spot_sell'] },
         lastCheckedAt: { type: Number, default: 0 },
         nextCheckAt: { type: Number }
     },
@@ -97,7 +100,7 @@ const HyperAlertSchema = new Schema<HyperAlertDocument>(
     {
         wallet: { type: String, required: true },
         coin: { type: String, required: true },
-        direction: { type: String, required: true, enum: ['long', 'short', 'spot'] },
+        direction: { type: String, required: true, enum: ['long', 'short', 'spot_buy', 'spot_sell'] },
         branch: { type: String, enum: ['FRESH_WALLET', 'WHALE_ACTIVITY', 'BIG_WHALE', 'BIG_TWAP'], required: false },
         totalNotional: { type: Number, required: true },
         sentAt: { type: Date, required: true },
@@ -224,14 +227,14 @@ export default class HyperliquidDBService {
                     existing.totalNotional += trade.notional;
                     existing.tradeCount += 1;
                     existing.lastTradeTime = Math.max(existing.lastTradeTime, trade.tradeTime);
-                    if (trade.direction === 'spot') {
+                    if (isSpotDirection(trade.direction)) {
                         existing.trades.push({ ts: trade.tradeTime, size: trade.notional });
                     }
                     continue;
                 }
 
                 const trades_: TradeSnapshot[] = [];
-                if (trade.direction === 'spot') {
+                if (isSpotDirection(trade.direction)) {
                     trades_.push({ ts: trade.tradeTime, size: trade.notional });
                 }
 
@@ -254,7 +257,7 @@ export default class HyperliquidDBService {
                         lastTradeTime: entry.lastTradeTime
                     }
                 };
-                if (entry.filter.direction === 'spot' && entry.trades.length > 0) {
+                if (isSpotDirection(entry.filter.direction) && entry.trades.length > 0) {
                     update.$push = { trades: { $each: entry.trades } };
                 }
                 return {
