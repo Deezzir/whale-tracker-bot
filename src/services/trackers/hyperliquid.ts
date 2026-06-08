@@ -10,6 +10,7 @@ import DBService, {
     HyperTradeDirection,
     HyperTradeRecord,
     PositionKey,
+    TradeSnapshot,
     isSpotDirection
 } from '../db/hyperliquid';
 import APIService, { AssetPosition, PortfolioResponse as TraderPortfolio, TraderState } from '../api/hyperliquid';
@@ -115,6 +116,14 @@ interface WsTrade {
 
 function isSpotSellDirection(direction: HyperTradeDirection): boolean {
     return direction === 'spot_sell';
+}
+
+function normalizeSpotTicker(symbol: string): string {
+    const upper = symbol.toUpperCase();
+    if (upper.startsWith('U') && config.hyperliquid.twapCoinThresholds[upper.slice(1)] !== undefined) {
+        return upper.slice(1);
+    }
+    return upper;
 }
 
 interface AlertContext {
@@ -1186,35 +1195,21 @@ export default class HyperliquidService extends Tracker {
         const alertChannels = this.getChannelsForBranch('BIG_TWAP');
         const isSell = isSpotSellDirection(candidate.direction);
 
-        if (!isSell) {
-            const positionState = state.spot!.balances.find((pos) => pos.coin === candidate.coin.split('/')[0]);
-            if (!positionState) {
-                this.logger.debug(`Skipping spot (no position): ${candidate.wallet} ${candidate.coin}`);
-                return;
-            }
-
-            const upstreamTotalNotional = parseFloat(positionState.total) * parseFloat(positionState.px);
-            if (upstreamTotalNotional < config.hyperliquid.minSpotNotionalUSD) {
-                this.logger.debug(
-                    `Skipping spot (upstream notional too low): ${candidate.wallet} ${candidate.coin} ${formatCurrency(upstreamTotalNotional)}`
-                );
-                return;
-            }
-
-            candidate.totalNotional = upstreamTotalNotional;
-            await DBService.updateTradeNotional(candidate.id, candidate.totalNotional);
-        }
-
-        const isTwap = this.detectTwap(candidate);
-        const branch: AlertBranch | null = isTwap ? 'BIG_TWAP' : null;
-
-        if (!branch) {
-            // Not TWAP - skip (spot alerts only fire for TWAP patterns)
+        const twap = this.detectTwap(candidate);
+        if (!twap) {
+            // Not a qualifying TWAP pattern - skip (spot alerts only fire for TWAP patterns)
             this.logger.debug(
                 `Skipping spot (not TWAP pattern): ${candidate.wallet} ${candidate.coin} trades=${candidate.tradeCount}`
             );
             return;
         }
+
+        candidate.trades = twap.windowTrades;
+        candidate.tradeCount = twap.windowTrades.length;
+        candidate.totalNotional = twap.windowNotional;
+        await DBService.updateTradeNotional(candidate.id, candidate.totalNotional);
+
+        const branch: AlertBranch = 'BIG_TWAP';
 
         const lastAlerts = await DBService.getLastAlerts(
             candidate.wallet,
@@ -1333,15 +1328,30 @@ export default class HyperliquidService extends Tracker {
         }
     }
 
-    private detectTwap(candidate: HyperAggregationRecord): boolean {
-        if (candidate.totalNotional <= 0) return false;
-        if (candidate.tradeCount < 5) return false;
-        const coinBase = candidate.coin.toUpperCase().split('/')[0];
-        const threshold =
-            coinBase === 'BTC' || coinBase === 'ETH'
-                ? config.hyperliquid.twapBtcEthMinUSD
-                : config.hyperliquid.twapOtherMinUSD;
-        return candidate.totalNotional >= threshold;
+    private detectTwap(
+        candidate: HyperAggregationRecord
+    ): { windowTrades: TradeSnapshot[]; windowNotional: number } | null {
+        const coinBase = normalizeSpotTicker(candidate.coin.split('/')[0]);
+        const threshold = config.hyperliquid.twapCoinThresholds[coinBase];
+        if (threshold === undefined) return null;
+
+        const trades = candidate.trades || [];
+        if (trades.length < 5) return null;
+
+        const sorted = [...trades].sort((a, b) => a.ts - b.ts);
+        const windowStart = sorted[sorted.length - 1].ts - config.hyperliquid.twapWindowMs;
+        const windowTrades = sorted.filter((t) => t.ts >= windowStart);
+        if (windowTrades.length < 5) return null;
+
+        const windowNotional = windowTrades.reduce((sum, t) => sum + Math.abs(t.size), 0);
+        if (windowNotional < threshold) return null;
+
+        const durationMs = windowTrades[windowTrades.length - 1].ts - windowTrades[0].ts;
+        if (durationMs <= 0) return null;
+        const avgIntervalMs = durationMs / (windowTrades.length - 1);
+        if (avgIntervalMs > config.hyperliquid.twapMaxIntervalMs) return null;
+
+        return { windowTrades, windowNotional };
     }
 
     private async formatTwapAlert(
@@ -1380,6 +1390,7 @@ export default class HyperliquidService extends Tracker {
         const cycleIntervalSec = Math.round(cycleIntervalMs / 1000);
 
         const coinBase = candidate.coin.split('/')[0];
+        const displayCoin = normalizeSpotTicker(coinBase);
         let volume24h = 0;
         let marketCap = 0;
         let intensity = 0;
@@ -1443,7 +1454,7 @@ export default class HyperliquidService extends Tracker {
         const lines = [
             '🔄 <b>BIG TWAP DETECTED</b> 🔄',
             '',
-            `${dirIcon} <code>${formatCurrency(candidate.totalNotional)}</code> ${actionWord} <b>${escapeHtml(coinBase)}</b> in ${durationStr} ${sideBlock}`,
+            `${dirIcon} <code>${formatCurrency(candidate.totalNotional)}</code> ${actionWord} <b>${escapeHtml(displayCoin)}</b> in ${durationStr} ${sideBlock}`,
             `~<code>${formatCurrency(perCycleAmount)}</code> every ${cycleIntervalStr}`,
             '',
             `σ: ${sigma.toFixed(2)}%  ·  Intensity: ${intensity.toFixed(2)}x`,
@@ -1502,7 +1513,7 @@ export default class HyperliquidService extends Tracker {
         }
 
         lines.push('');
-        const hashCoin = candidate.coin.replace(/[^a-zA-Z0-9]/g, '');
+        const hashCoin = displayCoin.replace(/[^a-zA-Z0-9]/g, '');
         lines.push(`#${escapeHtml(hashCoin)}_${candidate.wallet.slice(2, 6)}${candidate.wallet.slice(-4)}`);
 
         const hypurrscanUrl = `${this.hypurrscanExplorer}/address/${encodeURIComponent(candidate.wallet)}`;

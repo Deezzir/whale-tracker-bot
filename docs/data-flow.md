@@ -32,7 +32,7 @@ Code owner: `src/services/trackers/hyperliquid.ts`
   - Handles per-trade normalization in `handleTrade(...)`.
 - Normalization:
   - Perps mapped to `long`/`short` from side+taker.
-  - Spot mapped to `spot` direction with buyer/seller polarity.
+  - Spot mapped to `spot_buy`/`spot_sell`; buyer and seller aggregate independently and both record positive notional.
 - Batch/flush:
   - In-memory `tradeBatch` + periodic/size-triggered `flushTradeBatch()`.
   - Flush serialized via `flushMutex`.

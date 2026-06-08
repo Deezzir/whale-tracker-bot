@@ -3,7 +3,7 @@ import Logger from '../../common/logger';
 
 const logger = new Logger('OIDB');
 
-export interface IExchangeInstrument extends Document {
+export interface IOIExchangeInstrument extends Document {
     exchange: string;
     instrumentId: string;
     baseAsset: string;
@@ -13,7 +13,7 @@ export interface IExchangeInstrument extends Document {
     enabled: boolean;
 }
 
-const ExchangeInstrumentSchema = new Schema<IExchangeInstrument>(
+const OIExchangeInstrumentSchema = new Schema<IOIExchangeInstrument>(
     {
         exchange: { type: String, required: true, index: true },
         instrumentId: { type: String, required: true },
@@ -26,55 +26,15 @@ const ExchangeInstrumentSchema = new Schema<IExchangeInstrument>(
     { timestamps: true }
 );
 
-ExchangeInstrumentSchema.index({ exchange: 1, instrumentId: 1 }, { unique: true });
+OIExchangeInstrumentSchema.index({ exchange: 1, instrumentId: 1 }, { unique: true });
 
-const ExchangeInstrumentModel = mongoose.model<IExchangeInstrument>('ExchangeInstrument', ExchangeInstrumentSchema);
+const OIExchangeInstrumentModel = mongoose.model<IOIExchangeInstrument>(
+    'OIExchangeInstrument',
+    OIExchangeInstrumentSchema
+);
 
 export type TriggerType = 'FAST_SPIKE' | 'SLOW_ACCUMULATION' | 'SUSTAINED_BUILD';
 export type Severity = 'HIGH' | 'CRITICAL';
-
-export interface IOIAlertRecord extends Document {
-    exchange: string;
-    instrumentId: string;
-    baseAsset: string;
-    triggerType: TriggerType;
-    triggerValue: number;
-    previousOI: number;
-    currentOI: number;
-    deltaOIPercent: number;
-    severity: Severity;
-    priceChangePercent: number | null;
-    detectedAt: Date;
-    sentAt: Date;
-    chatId: number;
-    messageId: number | null;
-    cooldownUntil: Date;
-}
-
-const OIAlertRecordSchema = new Schema<IOIAlertRecord>(
-    {
-        exchange: { type: String, required: true },
-        instrumentId: { type: String, required: true },
-        baseAsset: { type: String, required: true },
-        triggerType: { type: String, required: true, enum: ['FAST_SPIKE', 'SLOW_ACCUMULATION', 'SUSTAINED_BUILD'] },
-        triggerValue: { type: Number, required: true },
-        previousOI: { type: Number, required: true },
-        currentOI: { type: Number, required: true },
-        deltaOIPercent: { type: Number, required: true },
-        severity: { type: String, required: true, enum: ['HIGH', 'CRITICAL'] },
-        priceChangePercent: { type: Number, default: null },
-        detectedAt: { type: Date, required: true },
-        sentAt: { type: Date, required: true },
-        chatId: { type: Number, required: true },
-        messageId: { type: Number, default: null },
-        cooldownUntil: { type: Date, required: true }
-    },
-    { timestamps: true }
-);
-
-OIAlertRecordSchema.index({ exchange: 1, instrumentId: 1, sentAt: -1 });
-
-const OIAlertRecordModel = mongoose.model<IOIAlertRecord>('OIAlertRecord', OIAlertRecordSchema);
 
 export interface IOIWhitelistEntry extends Document {
     exchange: string;
@@ -140,7 +100,7 @@ export default class OIDBService {
         try {
             const now = new Date();
 
-            await ExchangeInstrumentModel.updateMany({ exchange }, { enabled: false });
+            await OIExchangeInstrumentModel.updateMany({ exchange }, { enabled: false });
 
             const ops = instruments.map((inst) => ({
                 updateOne: {
@@ -158,7 +118,7 @@ export default class OIDBService {
             }));
 
             if (ops.length > 0) {
-                await ExchangeInstrumentModel.bulkWrite(ops, { ordered: false });
+                await OIExchangeInstrumentModel.bulkWrite(ops, { ordered: false });
             }
 
             return instruments.length;
@@ -168,22 +128,13 @@ export default class OIDBService {
         }
     }
 
-    static async getEnabledInstruments(exchange?: string): Promise<IExchangeInstrument[]> {
+    static async getEnabledInstruments(exchange?: string): Promise<IOIExchangeInstrument[]> {
         try {
             const filter: any = { enabled: true };
             if (exchange) filter.exchange = exchange;
-            return ExchangeInstrumentModel.find(filter).lean();
+            return OIExchangeInstrumentModel.find(filter).lean();
         } catch (error) {
             logger.error(`Error fetching enabled instruments${exchange ? ` for ${exchange}` : ''}: ${error}`);
-            throw error;
-        }
-    }
-
-    static async insertAlert(record: Omit<IOIAlertRecord, keyof Document>): Promise<void> {
-        try {
-            await OIAlertRecordModel.create(record);
-        } catch (error) {
-            logger.error(`Error inserting OI alert record: ${error}`);
             throw error;
         }
     }
@@ -252,17 +203,6 @@ export default class OIDBService {
             return result.deletedCount;
         } catch (error) {
             logger.error(`Error cleaning old OI observations: ${error}`);
-            throw error;
-        }
-    }
-
-    static async cleanOldAlerts(ttlMs: number): Promise<number> {
-        try {
-            const cutoff = new Date(Date.now() - ttlMs);
-            const result = await OIAlertRecordModel.deleteMany({ sentAt: { $lt: cutoff } });
-            return result.deletedCount;
-        } catch (error) {
-            logger.error(`Error cleaning old OI alert records: ${error}`);
             throw error;
         }
     }

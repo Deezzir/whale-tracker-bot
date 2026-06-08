@@ -22,7 +22,7 @@ Normalization details:
   - Buy taker -> `long`
   - Sell taker -> `short`
 - Spot:
-  - Buyer and seller both materialized with opposite notional signs.
+  - Buyer and seller aggregate independently as `spot_buy` / `spot_sell`; both record positive notional, so a seller's `totalNotional` is the cumulative USD sold over the window.
 
 ## Aggregation and Scan
 
@@ -44,9 +44,20 @@ Candidates are classified into one of four alert branches:
 
 3. **Big Whale** — any wallet, position >= $1M (`HL_BIG_WHALE_MIN_USD`)
 
-4. **Big TWAP** — spot buy accumulation with >= 5 trades in window:
-  - BTC/ETH: >= $1M (`HL_TWAP_BTC_ETH_MIN_USD`)
-  - Other coins: >= $300K (`HL_TWAP_OTHER_MIN_USD`)
+4. **Big TWAP** — spot buy or sell accumulation forming a TWAP pattern. A candidate qualifies only when, within a sliding 3h window (`HL_TWAP_WINDOW_MS`):
+  - the coin is one of BTC, ETH, SOL, XRP, DOGE, HYPE, BNB,
+  - there are >= 5 trades,
+  - the average interval between trades is <= 45s (`HL_TWAP_MAX_INTERVAL_MS`),
+  - the traded notional within the window meets the per-coin minimum:
+    - BTC: >= $19M (`HL_TWAP_BTC_MIN_USD`)
+    - ETH: >= $8M (`HL_TWAP_ETH_MIN_USD`)
+    - SOL: >= $5M (`HL_TWAP_SOL_MIN_USD`)
+    - XRP: >= $4M (`HL_TWAP_XRP_MIN_USD`)
+    - DOGE: >= $4M (`HL_TWAP_DOGE_MIN_USD`)
+    - HYPE: >= $5M (`HL_TWAP_HYPE_MIN_USD`)
+    - BNB: >= $5M (`HL_TWAP_BNB_MIN_USD`)
+
+  The alert size, cycle stats and re-alert growth all reflect this 3h window. Spot trades for any other coin are still ingested and aggregated for analysis but never produce a TWAP alert. Sell-side TWAPs render with red 'selling' styling on the same channel.
 
 Re-alert only when growth exceeds dynamic threshold:
 

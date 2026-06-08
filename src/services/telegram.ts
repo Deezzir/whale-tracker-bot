@@ -118,10 +118,16 @@ export default class TelegramService {
                 message: [
                     `<b>🟢 TWAP Channel</b>`,
                     ``,
-                    `🔄 BTC/ETH: <b>${fmt(config.hyperliquid.twapBtcEthMinUSD)}</b>`,
-                    `🔄 Others: <b>${fmt(config.hyperliquid.twapOtherMinUSD)}</b>`,
+                    `⏱ Window: <b>3h</b> · Interval: <b>≤45s</b>`,
+                    `🔄 BTC: <b>${fmt(config.hyperliquid.twapCoinThresholds.BTC)}</b>`,
+                    `🔄 ETH: <b>${fmt(config.hyperliquid.twapCoinThresholds.ETH)}</b>`,
+                    `🔄 SOL: <b>${fmt(config.hyperliquid.twapCoinThresholds.SOL)}</b>`,
+                    `🔄 XRP: <b>${fmt(config.hyperliquid.twapCoinThresholds.XRP)}</b>`,
+                    `🔄 DOGE: <b>${fmt(config.hyperliquid.twapCoinThresholds.DOGE)}</b>`,
+                    `🔄 HYPE: <b>${fmt(config.hyperliquid.twapCoinThresholds.HYPE)}</b>`,
+                    `🔄 BNB: <b>${fmt(config.hyperliquid.twapCoinThresholds.BNB)}</b>`,
                     `📈 Re-alert: <b>+${config.hyperliquid.minimalGrowthPercent}%</b>`,
-                    `📋 Min trades: 5 (buy-side only)`
+                    `📋 Min trades: 5`
                 ].join('\n')
             },
             {

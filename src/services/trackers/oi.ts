@@ -382,11 +382,8 @@ export default class OIService extends Tracker {
             while (this.running) {
                 try {
                     const deletedObs = await DBService.cleanOldObservations(config.oi.cleanupTTLms);
-                    const deletedAlerts = await DBService.cleanOldAlerts(config.oi.cleanupTTLms);
-                    if (deletedObs > 0 || deletedAlerts > 0) {
-                        this.logger.info(
-                            `Cleanup: deleted ${deletedObs} old observations, ${deletedAlerts} old alerts`
-                        );
+                    if (deletedObs > 0) {
+                        this.logger.info(`Cleanup: deleted ${deletedObs} old observations`);
                     }
                 } catch (error) {
                     this.logger.error(`Failed to cleanup: ${error}`);
@@ -1193,13 +1190,6 @@ export default class OIService extends Tracker {
                     });
                 }
                 await redis.set(cooldownKey, event.severity, { EX: config.oi.cooldownSeconds });
-                await DBService.insertAlert({
-                    ...event,
-                    sentAt: new Date(),
-                    chatId: channel.chatId,
-                    messageId,
-                    cooldownUntil: new Date(Date.now() + config.oi.cooldownSeconds * 1000)
-                } as any);
             } catch (error) {
                 this.logger.error(`Failed to send alert for ${event.exchange}:${event.instrumentId}: ${error}`);
             }
