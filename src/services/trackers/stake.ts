@@ -12,7 +12,7 @@ import DBService, {
 } from '../db/stake';
 import { ChatChannel, Tracker } from '../../common/tracker';
 import { InlineKeyboardMarkup } from 'telegraf/types';
-import { capitalize, formatCurrency, sleep } from '../../common/utils';
+import { capitalize, computeBackoffDelayMs, formatCurrency, sleep } from '../../common/utils';
 import puppeteer from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import ProxyService, { Proxy } from '../proxies';
@@ -172,6 +172,7 @@ export default class StakeService extends Tracker {
     private betsBatch: Partial<StakeBetDocument>[] = [];
     private betsBatchInterval?: NodeJS.Timeout;
     private reconnecting = false;
+    private reconnectAttempts = 0;
 
     public constructor(tg: Tg, channels: ChatChannel[], screenshotEnabled = false, useProxy = false) {
         super(tg, channels, screenshotEnabled);
@@ -197,6 +198,7 @@ export default class StakeService extends Tracker {
             }, config.stake.batchFlushIntervalMs);
 
             await this.subscribeBets();
+            this.reconnectAttempts = 0;
             this.monitorTask = this.mainLoop();
         } catch (error) {
             this.running = false;
@@ -509,9 +511,17 @@ export default class StakeService extends Tracker {
     private async reconnectPage(): Promise<void> {
         if (!this.running || this.reconnecting) return;
         this.reconnecting = true;
-        this.logger.info('Reinitializing Puppeteer due to WebSocket disconnect...');
+
+        const delay = computeBackoffDelayMs(this.reconnectAttempts, config.stake.retry);
+        this.reconnectAttempts++;
+        this.logger.info(
+            `Reinitializing Puppeteer due to WebSocket disconnect in ${Math.round(delay / 1000)}s (attempt ${this.reconnectAttempts})...`
+        );
 
         try {
+            await this.cancellableSleep(delay);
+            if (!this.running) return;
+
             await this.disposePuppeteer();
 
             this.browser = await this.initBrowser();
@@ -521,6 +531,7 @@ export default class StakeService extends Tracker {
             this.logger.info('Puppeteer reinitialized successfully');
 
             await this.subscribeBets();
+            this.reconnectAttempts = 0;
         } catch (error) {
             this.logger.error(`Error recreating page: ${error}`);
             await this.disposePuppeteer();

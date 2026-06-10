@@ -1177,14 +1177,13 @@ export default class OIService extends Tracker {
             if (i > 0) await sleep(1000);
             const channel = channels[i];
             try {
-                let messageId: number | undefined;
                 if (screenshot) {
-                    messageId = await this.tg.sendPhoto(channel.chatId, screenshot, msg, {
+                    await this.tg.sendPhoto(channel.chatId, screenshot, msg, {
                         reply_markup: buttons,
                         message_thread_id: channel.topicId
                     });
                 } else {
-                    messageId = await this.tg.sendMessage(channel.chatId, msg, {
+                    await this.tg.sendMessage(channel.chatId, msg, {
                         reply_markup: buttons,
                         message_thread_id: channel.topicId
                     });

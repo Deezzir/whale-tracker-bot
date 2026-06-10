@@ -3,7 +3,7 @@ import { Tracker } from '../../common/tracker';
 import { config } from '../../config';
 import APIService, { Market, Trade } from '../api/polymarket';
 import DBService, { PolyAggregationRecord, PolyTradeInput, PositionKey } from '../db/polymarket';
-import { escapeHtml, formatCurrency, formatDate, sleep } from '../../common/utils';
+import { computeBackoffDelayMs, escapeHtml, formatCurrency, formatDate, sleep } from '../../common/utils';
 
 type MarketCategory = 'sport' | 'esports' | 'regular';
 type AccountTag = 'FRESH' | 'DORMANT' | 'SMALL' | 'MEDIUM' | 'LARGE';
@@ -120,6 +120,7 @@ export default class PolymarketService extends Tracker {
     private connectTimeout: NodeJS.Timeout | null = null;
     private affectedKeys = new Map<string, PositionKey>();
     private ws: WebSocket | null = null;
+    private reconnectAttempts = 0;
 
     async start(): Promise<void> {
         if (this.running) return;
@@ -127,6 +128,7 @@ export default class PolymarketService extends Tracker {
         this.logger.info('Monitoring started');
 
         await this.backfill();
+        this.reconnectAttempts = 0;
         await this.subscribeToLiveTrades();
 
         this.batchInterval = setInterval(() => {
@@ -363,6 +365,12 @@ export default class PolymarketService extends Tracker {
         await this.sendAlert(candidate, msg, buttons);
     }
 
+    private nextReconnectDelayMs(): number {
+        const delay = computeBackoffDelayMs(this.reconnectAttempts, config.polymarket.retry);
+        this.reconnectAttempts++;
+        return delay;
+    }
+
     private reconnectWebSocket() {
         if (this.pingInterval) {
             clearInterval(this.pingInterval);
@@ -382,11 +390,16 @@ export default class PolymarketService extends Tracker {
     private async subscribeToLiveTrades() {
         const ws = new WebSocket(config.polymarket.wss);
 
-        this.connectTimeout = setTimeout(() => {
+        this.connectTimeout = setTimeout(async () => {
             this.connectTimeout = null;
+            const delay = this.nextReconnectDelayMs();
             this.logger.warn(
-                `WebSocket did not open within ${PolymarketService.CONNECT_TIMEOUT_MS / 1000}s — forcing reconnect`
+                `WebSocket did not open within ${PolymarketService.CONNECT_TIMEOUT_MS / 1000}s — reconnecting in ${Math.round(delay / 1000)}s (attempt ${this.reconnectAttempts})`
             );
+            const stale = this.ws;
+            this.ws = null;
+            if (stale) stale.close();
+            await sleep(delay);
             this.reconnectWebSocket();
         }, PolymarketService.CONNECT_TIMEOUT_MS);
 
@@ -395,6 +408,7 @@ export default class PolymarketService extends Tracker {
                 clearTimeout(this.connectTimeout);
                 this.connectTimeout = null;
             }
+            this.reconnectAttempts = 0;
             this.logger.info('WebSocket connected, subscribing to orders_matched...');
             ws.send(
                 JSON.stringify({ action: 'subscribe', subscriptions: [{ topic: 'activity', type: 'orders_matched' }] })
@@ -418,9 +432,14 @@ export default class PolymarketService extends Tracker {
         };
 
         let closed = false;
-        const handleClose = () => {
+        const handleClose = async () => {
             if (closed) return;
             closed = true;
+            const delay = this.nextReconnectDelayMs();
+            this.logger.warn(
+                `WebSocket connection closed, reconnecting in ${Math.round(delay / 1000)}s (attempt ${this.reconnectAttempts})...`
+            );
+            await sleep(delay);
             this.reconnectWebSocket();
         };
 
@@ -429,10 +448,10 @@ export default class PolymarketService extends Tracker {
             if (ws.readyState !== WebSocket.OPEN) handleClose();
         };
 
-        ws.onclose = (event) => {
+        ws.onclose = async (event) => {
             const reason = event.reason || 'unknown';
             this.logger.info(`WebSocket closed, reason: ${reason}`);
-            if (this.ws === ws) handleClose();
+            if (this.ws === ws) await handleClose();
         };
 
         this.ws = ws;

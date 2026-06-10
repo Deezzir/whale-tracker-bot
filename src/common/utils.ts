@@ -4,6 +4,17 @@ export function sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+export function computeBackoffDelayMs(
+    attempt: number,
+    retry: { initialDelayMs: number; backoffMultiplier: number; maxDelayMs: number },
+    jitterRatio = 0.3
+): number {
+    const exponential = retry.initialDelayMs * Math.pow(retry.backoffMultiplier, Math.max(0, attempt));
+    const capped = Math.min(exponential, retry.maxDelayMs);
+    const jitter = Math.random() * jitterRatio * capped;
+    return capped + jitter;
+}
+
 export class TimeoutError extends Error {
     constructor(label: string, ms: number) {
         super(`${label} timed out after ${ms}ms`);

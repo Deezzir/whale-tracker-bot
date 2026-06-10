@@ -74,7 +74,7 @@ function parseCoinglassExchanges(value: string): string[] {
     if (invalidExchanges.length > 0) {
         throw new Error(
             `COINGLASS_EXCHANGES cannot include externally managed exchanges: ${invalidExchanges.join(', ')}. ` +
-            'Remove them from COINGLASS_EXCHANGES.'
+                'Remove them from COINGLASS_EXCHANGES.'
         );
     }
 
@@ -163,7 +163,13 @@ export const config = {
         batchSize: 30,
         batchFlushIntervalMs: 30 * 1000, // 30 seconds
         cleanupTTLms: 24 * 60 * 60 * 1000, // 24 hours
-        alertAgeMs: 5 * 60 * 1000 // 5 minutes
+        alertAgeMs: 5 * 60 * 1000, // 5 minutes
+        retry: {
+            maxAttempts: 3,
+            initialDelayMs: 1000,
+            backoffMultiplier: 2,
+            maxDelayMs: 30000
+        }
     },
     polymarket: {
         alertThresholdUsd: Number(optionalEnv('POLY_ALERT_THRESHOLD_USD', '100000')),

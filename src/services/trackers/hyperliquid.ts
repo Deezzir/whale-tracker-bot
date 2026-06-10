@@ -2,7 +2,7 @@ import { config } from '../../config';
 import { Markup } from 'telegraf';
 import { InlineKeyboardMarkup } from 'telegraf/types';
 import { ChatChannel, Tracker } from '../../common/tracker';
-import { escapeHtml, formatCurrency, formatTimeAgo, sleep } from '../../common/utils';
+import { computeBackoffDelayMs, escapeHtml, formatCurrency, formatTimeAgo, sleep } from '../../common/utils';
 import Tg from '../telegram';
 import DBService, {
     HyperAggregationRecord,
@@ -132,6 +132,14 @@ interface AlertContext {
     portfolio: TraderPortfolio;
 }
 
+interface SocketSlot {
+    ws: WebSocket | null;
+    coins: string[];
+    pingInterval: NodeJS.Timeout | null;
+    reconnecting: boolean;
+    reconnectAttempts: number;
+}
+
 export default class HyperliquidService extends Tracker {
     private api = new APIService();
     private hypurrscanExplorer = config.hyperliquid.hypurrscanExplorer;
@@ -141,12 +149,7 @@ export default class HyperliquidService extends Tracker {
     private bigWhaleChannels: ChatChannel[];
     private twapChannels: ChatChannel[];
     private trackChannels: ChatChannel[];
-    private sockets: Array<{
-        ws: WebSocket | null;
-        coins: string[];
-        pingInterval: NodeJS.Timeout | null;
-        reconnecting: boolean;
-    }> = [];
+    private sockets: SocketSlot[] = [];
     private tradeBatch: HyperTradeRecord[] = [];
     private batchInterval?: NodeJS.Timeout;
     private affectedKeys = new Map<string, PositionKey>();
@@ -190,7 +193,8 @@ export default class HyperliquidService extends Tracker {
             ws: null,
             coins: group,
             pingInterval: null,
-            reconnecting: false
+            reconnecting: false,
+            reconnectAttempts: 0
         }));
         for (const slot of this.sockets) slot.ws = this.connectWebSocket(slot);
 
@@ -573,12 +577,7 @@ export default class HyperliquidService extends Tracker {
         return groups;
     }
 
-    private reconnectWebSocket(slot: {
-        ws: WebSocket | null;
-        coins: string[];
-        pingInterval: NodeJS.Timeout | null;
-        reconnecting: boolean;
-    }): void {
+    private reconnectWebSocket(slot: SocketSlot): void {
         if (slot.reconnecting) return;
         slot.reconnecting = true;
 
@@ -594,26 +593,27 @@ export default class HyperliquidService extends Tracker {
         }
 
         if (this.running) {
+            const delay = computeBackoffDelayMs(slot.reconnectAttempts, config.hyperliquid.retry);
+            slot.reconnectAttempts++;
+            this.logger.warn(
+                `Reconnecting WebSocket in ${Math.round(delay / 1000)}s (attempt ${slot.reconnectAttempts})`
+            );
             setTimeout(() => {
                 slot.reconnecting = false;
                 if (this.running) {
                     slot.ws = this.connectWebSocket(slot);
                 }
-            }, 5000);
+            }, delay);
         } else {
             slot.reconnecting = false;
         }
     }
 
-    private connectWebSocket(slot: {
-        ws: WebSocket | null;
-        coins: string[];
-        pingInterval: NodeJS.Timeout | null;
-        reconnecting: boolean;
-    }): WebSocket {
+    private connectWebSocket(slot: SocketSlot): WebSocket {
         const ws = new WebSocket(config.hyperliquid.wss);
 
         ws.onopen = () => {
+            slot.reconnectAttempts = 0;
             this.logger.info(
                 `WebSocket connected, subscribing to ${slot.coins.length} coins: ${slot.coins.join(', ')}`
             );
