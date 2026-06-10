@@ -74,7 +74,7 @@ function parseCoinglassExchanges(value: string): string[] {
     if (invalidExchanges.length > 0) {
         throw new Error(
             `COINGLASS_EXCHANGES cannot include externally managed exchanges: ${invalidExchanges.join(', ')}. ` +
-                'Remove them from COINGLASS_EXCHANGES.'
+            'Remove them from COINGLASS_EXCHANGES.'
         );
     }
 
@@ -194,8 +194,8 @@ export const config = {
     db: {
         mongodbURI: optionalEnv('MONGODB_URI', 'mongodb://root:example@localhost:27017') as string,
         dbName: optionalEnv('DB_NAME', 'whale-tracker-bot') as string,
-        autoIndex: runtimeEnv !== Environment.Production ? true : false,
-        ensureIndexesOnStart: runtimeEnv !== Environment.Production ? true : false
+        autoIndex: true,
+        ensureIndexesOnStart: true
     },
     redis: getRedisConfig(),
     puppeteer: {
@@ -272,6 +272,6 @@ export const config = {
         hlIntervalMs: 15 * 60 * 1000, // 15 minutes
         noDataTimeoutMs: 120 * 60 * 1000, // 2 hour
         scanStallTimeoutMs: 120 * 60 * 1000, // 2 hour
-        cleanupTTLms: 5 * 24 * 60 * 60 * 1000 // 5 days
+        cleanupTTLms: 3 * 24 * 60 * 60 * 1000 // 3 days
     }
 } as const;

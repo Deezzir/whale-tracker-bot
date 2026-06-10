@@ -450,7 +450,7 @@ export default class HyperliquidDBService {
         try {
             const cutoffDate = new Date(Date.now() - ttlMs);
             const result = await HyperAggregationModel.deleteMany({ updatedAt: { $lt: cutoffDate } });
-            logger.info(`Deleted ${result.deletedCount} old records`);
+            logger.info(`Deleted ${result.deletedCount} old aggregation records`);
         } catch (error) {
             logger.error(`${error}`);
             throw error;

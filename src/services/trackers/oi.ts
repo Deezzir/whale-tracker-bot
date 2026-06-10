@@ -383,7 +383,7 @@ export default class OIService extends Tracker {
                 try {
                     const deletedObs = await DBService.cleanOldObservations(config.oi.cleanupTTLms);
                     if (deletedObs > 0) {
-                        this.logger.info(`Cleanup: deleted ${deletedObs} old observations`);
+                        this.logger.info(`Deleted ${deletedObs} old observation records`);
                     }
                 } catch (error) {
                     this.logger.error(`Failed to cleanup: ${error}`);

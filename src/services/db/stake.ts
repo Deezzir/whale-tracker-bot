@@ -83,7 +83,7 @@ export default class StakeDBService {
         try {
             const cutoffDate = new Date(Date.now() - ttlMs);
             const result = await StakeBetModel.deleteMany({ updatedAt: { $lt: cutoffDate } });
-            logger.info(`Deleted ${result.deletedCount} old records`);
+            logger.info(`Deleted ${result.deletedCount} old bet records`);
         } catch (error) {
             logger.error(`${error}`);
             throw error;

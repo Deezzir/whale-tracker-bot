@@ -17,8 +17,20 @@ async function ensureIndexesOnStartup(): Promise<void> {
     if (modelNames.length === 0) return;
 
     const start = performance.now();
-    await Promise.all(modelNames.map((modelName) => mongoose.model(modelName).createIndexes()));
-    logger.info(`Ensured indexes for ${modelNames.length} models in ${(performance.now() - start).toFixed(1)}ms`);
+    const results = await Promise.allSettled(modelNames.map((modelName) => mongoose.model(modelName).createIndexes()));
+
+    const failures = results.flatMap((result, i) =>
+        result.status === 'rejected' ? [{ model: modelNames[i], reason: result.reason }] : []
+    );
+
+    for (const failure of failures) {
+        logger.error(`Failed to ensure indexes for ${failure.model}: ${failure.reason}`);
+    }
+
+    const succeeded = modelNames.length - failures.length;
+    logger.info(
+        `Ensured indexes for ${succeeded}/${modelNames.length} models in ${(performance.now() - start).toFixed(1)}ms`
+    );
 }
 
 async function connectDB() {
