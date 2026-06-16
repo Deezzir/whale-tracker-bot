@@ -13,6 +13,7 @@ import DBService, {
 import { ChatChannel, Tracker } from '../../common/tracker';
 import { InlineKeyboardMarkup } from 'telegraf/types';
 import { capitalize, computeBackoffDelayMs, formatCurrency, sleep } from '../../common/utils';
+import { createBrowserDir, removeBrowserDir } from '../../common/browser-dir';
 import puppeteer from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import ProxyService, { Proxy } from '../proxies';
@@ -169,6 +170,7 @@ export default class StakeService extends Tracker {
 
     private page: Page | null = null;
     private browser: Browser | null = null;
+    private browserDir: string | null = null;
     private betsBatch: Partial<StakeBetDocument>[] = [];
     private betsBatchInterval?: NodeJS.Timeout;
     private reconnecting = false;
@@ -255,23 +257,37 @@ export default class StakeService extends Tracker {
     private async disposePuppeteer(): Promise<void> {
         const page = this.page;
         const browser = this.browser;
+        const browserDir = this.browserDir;
         this.page = null;
         this.browser = null;
+        this.browserDir = null;
 
         const closeOps: Promise<unknown>[] = [];
         if (page) closeOps.push(page.close());
         if (browser) closeOps.push(browser.close());
         if (closeOps.length > 0) await Promise.allSettled(closeOps);
+
+        await removeBrowserDir(browserDir);
     }
 
     private async initBrowser(): Promise<Browser> {
-        return await puppeteer.launch({
-            headless: config.puppeteer.headless,
-            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
-            userDataDir: config.puppeteer.userDir ? config.puppeteer.userDir : undefined,
-            args: this.browserArgs,
-            defaultViewport: { width: 1366, height: 768 }
-        });
+        const configuredDir = config.puppeteer.userDir || null;
+        const ephemeralDir = configuredDir ? null : await createBrowserDir();
+        this.browserDir = ephemeralDir;
+
+        try {
+            return await puppeteer.launch({
+                headless: config.puppeteer.headless,
+                executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
+                userDataDir: configuredDir ?? ephemeralDir ?? undefined,
+                args: this.browserArgs,
+                defaultViewport: { width: 1366, height: 768 }
+            });
+        } catch (error) {
+            this.browserDir = null;
+            await removeBrowserDir(ephemeralDir);
+            throw error;
+        }
     }
 
     private async initPage(browser: Browser): Promise<Page> {

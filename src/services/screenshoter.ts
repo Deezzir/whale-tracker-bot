@@ -4,6 +4,7 @@ import Logger from '../common/logger';
 import { Browser, Page } from 'puppeteer';
 import { Proxy } from './proxies';
 import { retry } from '../common/utils';
+import { createBrowserDir, removeBrowserDir } from '../common/browser-dir';
 import { Mutex } from '../common/mutex';
 import { config } from '../config';
 
@@ -12,6 +13,7 @@ puppeteer.use(StealthPlugin());
 
 export default class ScreenshotService {
     private browser: Browser | null = null;
+    private browserDir: string | null = null;
     private startPromise: Promise<void> | null = null;
     private refCount = 0;
     private readonly captureQueue = new Mutex();
@@ -58,14 +60,28 @@ export default class ScreenshotService {
         ];
         if (!config.puppeteer.headless) args.push('--display=:0');
 
-        this.browser = await puppeteer.launch({
-            headless: config.puppeteer.headless,
-            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
-            args
-        });
+        const browserDir = await createBrowserDir();
+        this.browserDir = browserDir;
+
+        try {
+            this.browser = await puppeteer.launch({
+                headless: config.puppeteer.headless,
+                executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
+                userDataDir: browserDir,
+                args
+            });
+        } catch (error) {
+            this.browserDir = null;
+            await removeBrowserDir(browserDir);
+            throw error;
+        }
 
         this.browser.on('disconnected', () => {
             this.browser = null;
+            if (this.browserDir === browserDir) {
+                this.browserDir = null;
+                void removeBrowserDir(browserDir);
+            }
         });
 
         logger.info('Puppeteer initialized');
@@ -79,13 +95,13 @@ export default class ScreenshotService {
 
     private async shutdown(): Promise<void> {
         const browser = this.browser;
+        const browserDir = this.browserDir;
         this.browser = null;
-        if (!browser) return;
-        await browser.close().catch((error) => {
-            logger.warn(`Failed to stop Puppeteer cleanly: ${error}`);
-        });
-        this.browser = null;
-        logger.info('Puppeteer stopped');
+        this.browserDir = null;
+
+        await browser?.close().catch((error) => logger.warn(`Failed to stop Puppeteer cleanly: ${error}`));
+        await removeBrowserDir(browserDir);
+        if (browser) logger.info('Puppeteer stopped');
     }
 
     async capture(

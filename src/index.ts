@@ -13,6 +13,7 @@ import { Tracker } from './common/tracker';
 import { config } from './config';
 import HealthService from './healthz';
 import { registerHyperliquidHandlers, registerOIHandlers } from './handlers';
+import { sweepOrphanBrowserDirs } from './common/browser-dir';
 
 const logger = new Logger('Main');
 const telegram: Tg = new Tg();
@@ -129,6 +130,7 @@ async function shutdown(code: number): Promise<void> {
 }
 
 async function main(): Promise<void> {
+    await sweepOrphanBrowserDirs();
     await connectDB();
     await connectRedis();
     void telegram.start(
