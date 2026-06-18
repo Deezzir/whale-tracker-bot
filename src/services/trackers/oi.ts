@@ -604,7 +604,7 @@ export default class OIService extends Tracker {
                     }
                     return true;
                 }
-            } catch (error) {}
+            } catch (error) { }
             return false;
         };
 
@@ -911,7 +911,7 @@ export default class OIService extends Tracker {
 
         this.logger.info(
             `Hyperliquid scan complete: ${hlPairs.length} attempted, ${stored} stored, ${skipped} skipped, ${anomaliesDetected} anomalies, ${transitioned} transitioned [${cycleDuration.toFixed(1)}s] | ` +
-                `Status: ${ready} READY, ${warming} WARMUP, ${degraded} DEGRADED`
+            `Status: ${ready} READY, ${warming} WARMUP, ${degraded} DEGRADED`
         );
     }
 
@@ -1015,7 +1015,7 @@ export default class OIService extends Tracker {
 
         this.logger.info(
             `Coinglass scan complete: ${readyPairs.length} pairs, ${anomaliesDetected} anomalies, ${failed} failed, ${transitioned} transitioned [${cycleDuration.toFixed(1)}s] | ` +
-                `Status: ${ready} READY, ${warming} WARMUP, ${degraded} DEGRADED`
+            `Status: ${ready} READY, ${warming} WARMUP, ${degraded} DEGRADED`
         );
         if (exchangeStats.size > 0) {
             const breakdown = [...exchangeStats.entries()]
@@ -1112,6 +1112,7 @@ export default class OIService extends Tracker {
     private async sendAlert(event: OIAnomalyEvent & { pairEntryId: string }, channels: ChatChannel[]): Promise<void> {
         const redis = getRedisClient();
         const cooldownKey = `oi:cooldown:${event.exchange}:${event.instrumentId}`;
+        const skipScreenshot = !this.screenshotEnabled || event.exchange === 'Bitget';
 
         const cooldownActive = await redis.get(cooldownKey);
         if (cooldownActive) {
@@ -1128,7 +1129,7 @@ export default class OIService extends Tracker {
         const { msg, buttons } = result;
 
         let screenshot: Buffer | null = null;
-        if (this.screenshoter) {
+        if (!skipScreenshot) {
             const query = `${event.baseAsset} ${event.exchange} open interest`;
             try {
                 screenshot = await this.screenshoter.capture(
@@ -1211,8 +1212,8 @@ export default class OIService extends Tracker {
             n >= 1_000_000
                 ? `${(n / 1_000_000).toFixed(3)}M`
                 : n >= 1_000
-                  ? `${(n / 1_000).toFixed(2)}K`
-                  : n.toFixed(0);
+                    ? `${(n / 1_000).toFixed(2)}K`
+                    : n.toFixed(0);
         const pct = `${event.deltaOIPercent >= 0 ? '+' : ''}${event.deltaOIPercent.toFixed(1)}%`;
         const tokenDeltaLine =
             event.deltaOITokens !== undefined

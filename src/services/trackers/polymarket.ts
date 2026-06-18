@@ -270,8 +270,8 @@ export default class PolymarketService extends Tracker {
         const category: MarketCategory = isEsportsMarket(title)
             ? 'esports'
             : isSportMarket(title)
-              ? 'sport'
-              : 'regular';
+                ? 'sport'
+                : 'regular';
         const threshold =
             category === 'sport' ? config.polymarket.sportAlertThresholdUsd : config.polymarket.alertThresholdUsd;
         if (candidate.netUsd < threshold) {
@@ -516,13 +516,12 @@ export default class PolymarketService extends Tracker {
             `<b>Trade:</b> ${tagLabel(data.tradeTag)}`,
             `<b>Trade Median:</b> ${formatCurrency(data.tradeMedianUSD)}`,
             ``,
-            `${
-                data.tags.length > 0
-                    ? data.tags
-                          .slice(0, 2)
-                          .map((t) => `${escapeHtml(t)}`)
-                          .join(', ')
-                    : ''
+            `${data.tags.length > 0
+                ? data.tags
+                    .slice(0, 2)
+                    .map((t) => `${escapeHtml(t)}`)
+                    .join(', ')
+                : ''
             }`,
             ``
         ];
@@ -600,7 +599,14 @@ export default class PolymarketService extends Tracker {
             if (this.screenshotEnabled) {
                 try {
                     screenshot = await this.screenshoter.capture(
-                        `${config.polymarket.url}/profile/${candidate.wallet}`
+                        `${config.polymarket.url}/profile/${candidate.wallet}`,
+                        '#__pm_main',
+                        () => {
+                            const main = document.querySelector('#__pm_main');
+                            if (!main) return false;
+                            const text = (main.textContent || '').trim();
+                            return text.includes('Positions Value') && text.length > 200;
+                        }
                     );
                 } catch (err) {
                     this.logger.warn(`Screenshot failed for ${candidate.wallet}, sending alert without image: ${err}`);
