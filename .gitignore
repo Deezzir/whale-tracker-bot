@@ -155,3 +155,5 @@ docs/superpowers/
 .opencode
 .agents
 specs
+
+.DS_Store

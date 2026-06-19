@@ -18,13 +18,16 @@
     },
     "dependencies": {
         "@openrouter/sdk": "^0.12.79",
-        "axios": "^1.17.0",
+        "axios": "^1.18.0",
         "dotenv": "^17.4.2",
-        "mongoose": "^9.6.3",
+        "mongoose": "^9.7.1",
         "puppeteer": "^25.1.0",
         "puppeteer-extra": "^3.3.6",
         "puppeteer-extra-plugin-stealth": "^2.11.2",
         "redis": "^6.0.0",
         "telegraf": "^4.16.3"
+    },
+    "overrides": {
+        "mongodb": "6.21.0"
     }
 }
