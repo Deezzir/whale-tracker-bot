@@ -14,6 +14,8 @@ const COINGLASS_CANDLE_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 type PairStatus = 'WARMUP' | 'READY' | 'DEGRADED_DATA';
 type OISource = 'COINGLASS' | 'HYPERLIQUID';
 
+const AVAILABLE_SOURCES: OISource[] = ['COINGLASS', 'HYPERLIQUID'];
+
 interface PairStatisticalState {
     exchange: string;
     instrumentId: string;
@@ -298,11 +300,36 @@ export default class OIService extends Tracker {
     private defaultInterval: Interval = '30m';
     private oiChannels: ChatChannel[];
     private hlOIChannels: ChatChannel[];
+    private enabledSources: OISource[];
 
-    constructor(tg: Tg, oiChannels: ChatChannel[], hlOIChannels: ChatChannel[], screenshotEnabled = false) {
+    constructor(
+        tg: Tg,
+        sources: OISource[],
+        oiChannels: ChatChannel[],
+        hlOIChannels: ChatChannel[],
+        screenshotEnabled = false
+    ) {
         super(tg, [], screenshotEnabled);
         this.oiChannels = oiChannels;
         this.hlOIChannels = hlOIChannels;
+        this.enabledSources = sources
+            .map((s) => s.toUpperCase() as OISource)
+            .filter((s) => AVAILABLE_SOURCES.includes(s));
+    }
+
+    static validateSources(sources: string[]): sources is OISource[] {
+        const validSources = AVAILABLE_SOURCES.map((s) => s.toLowerCase());
+        if (sources.length === 0) return false;
+        for (const source of sources) {
+            if (!validSources.includes(source.toLowerCase())) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    static getValidSources(): string[] {
+        return AVAILABLE_SOURCES;
     }
 
     async start(): Promise<void> {
@@ -310,6 +337,7 @@ export default class OIService extends Tracker {
         this.running = true;
         this.logger.info('Monitoring started');
         this.logger.info(`Exchanges: [${config.oi.coinglassExchanges.join(', ')}]`);
+        this.logger.info(`Enabled OI sources: [${this.enabledSources.join(', ')}]`);
         await this.refreshUniverse();
         await this.backfill();
         this.monitorTask = this.mainLoop();
@@ -354,29 +382,37 @@ export default class OIService extends Tracker {
             }
         };
 
-        const coinglassScanLoop = async () => {
-            while (this.running) {
-                try {
-                    await this.coinglassScanAllPairs();
-                } catch (error) {
-                    this.logger.error(`Failed to run a scan loop: ${error}`);
-                }
-                if (!this.running) break;
-                await this.cancellableSleep(config.oi.coinglassIntervalMs);
+        const sourceScanLoops = this.enabledSources.map((source) => {
+            switch (source) {
+                case 'COINGLASS':
+                    return async () => {
+                        while (this.running) {
+                            try {
+                                await this.coinglassScanAllPairs();
+                            } catch (error) {
+                                this.logger.error(`Failed to run a scan loop: ${error}`);
+                            }
+                            if (!this.running) break;
+                            await this.cancellableSleep(config.oi.coinglassIntervalMs);
+                        }
+                    };
+                case 'HYPERLIQUID':
+                    return async () => {
+                        while (this.running) {
+                            try {
+                                await this.hlScanAllPairs();
+                            } catch (error) {
+                                this.logger.error(`Failed to run Hyperliquid scan cycle: ${error}`);
+                            }
+                            if (!this.running) break;
+                            await this.cancellableSleep(config.oi.hlIntervalMs);
+                        }
+                    };
+                default:
+                    this.logger.warn(`Unknown OI source: ${source}`);
+                    return async () => {};
             }
-        };
-
-        const hlScanLoop = async () => {
-            while (this.running) {
-                try {
-                    await this.hlScanAllPairs();
-                } catch (error) {
-                    this.logger.error(`Failed to run Hyperliquid scan cycle: ${error}`);
-                }
-                if (!this.running) break;
-                await this.cancellableSleep(config.oi.hlIntervalMs);
-            }
-        };
+        });
 
         const cleanupLoop = async () => {
             while (this.running) {
@@ -397,8 +433,7 @@ export default class OIService extends Tracker {
         const scanWatchDog = this.scanWatchDog(config.oi.scanStallTimeoutMs);
 
         await Promise.all([
-            coinglassScanLoop(),
-            hlScanLoop(),
+            ...sourceScanLoops.map((loop) => loop()),
             cleanupLoop(),
             refreshUniverseLoop(),
             alertNoDataLoop,
@@ -511,10 +546,19 @@ export default class OIService extends Tracker {
         const whitelistSet = new Set(whitelist.map((w) => `${w.exchange}:${w.instrumentId}`));
         if (whitelist.length > 0) this.logger.info(`OI whitelisting: (${whitelist.length} tokens included)`);
 
-        const result = await Promise.all([
-            this.refreshCoinglassUniverse(whitelistSet),
-            this.refreshHyperliquidUniverse(whitelistSet)
-        ]);
+        const sourceRefreshes = this.enabledSources.map((source) => {
+            switch (source) {
+                case 'COINGLASS':
+                    return this.refreshCoinglassUniverse(whitelistSet);
+                case 'HYPERLIQUID':
+                    return this.refreshHyperliquidUniverse(whitelistSet);
+                default:
+                    this.logger.warn(`Unknown OI source: ${source}`);
+                    return Promise.resolve(0);
+            }
+        });
+
+        const result = await Promise.all(sourceRefreshes);
         const totalPairs = result.reduce((sum, count) => sum + count, 0);
 
         if (totalPairs === 0) throw new Error(`No pairs detected for OI tracker`);
@@ -654,7 +698,9 @@ export default class OIService extends Tracker {
         for (let attempt = 0; attempt < MAX_RETRIES && retryQueue.length > 0; attempt++) {
             if (!this.running) break;
             const batch = retryQueue.splice(0);
-            this.logger.info(`Backfill retry pass ${attempt + 1}/${MAX_RETRIES}: ${batch.length} pairs to retry`);
+            this.logger.info(
+                `Backfill retry pass ${attempt + 1}/$trackerNames{MAX_RETRIES}: ${batch.length} pairs to retry`
+            );
             await sleep(2000 + Math.random() * 1000);
             await runPool(batch, attempt === MAX_RETRIES - 1);
             retried += batch.length - retryQueue.length;
@@ -671,7 +717,7 @@ export default class OIService extends Tracker {
     private async hyperliquidBackfill(
         entries: [string, PairStatisticalState][],
         startTime: number
-    ): Promise<{ filled: number; failed: number; rateLimited: number }> {
+    ): Promise<{ filled: number; failed: number; rateLimited: number; retried: number; localSeeded: number }> {
         let filled = 0;
         let failed = 0;
         let rateLimited = 0;
@@ -705,7 +751,7 @@ export default class OIService extends Tracker {
             );
         }
 
-        return { filled, failed, rateLimited };
+        return { filled, failed, rateLimited, retried: 0, localSeeded: 0 };
     }
 
     private async backfill(): Promise<void> {
@@ -716,10 +762,19 @@ export default class OIService extends Tracker {
         const hyperliquidEntries = entries.filter(([, s]) => isHyperliquidSource(s.source));
         const startTime = Date.now();
 
-        const result = await Promise.all([
-            this.coinglassBackfill(coinglassEntries, startTime),
-            this.hyperliquidBackfill(hyperliquidEntries, startTime)
-        ]);
+        const sourceBackfills = this.enabledSources.map((source) => {
+            switch (source) {
+                case 'COINGLASS':
+                    return this.coinglassBackfill(coinglassEntries, startTime);
+                case 'HYPERLIQUID':
+                    return this.hyperliquidBackfill(hyperliquidEntries, startTime);
+                default:
+                    this.logger.warn(`Unknown OI source: ${source}`);
+                    return Promise.resolve({ filled: 0, failed: 0, rateLimited: 0, retried: 0, localSeeded: 0 });
+            }
+        });
+
+        const result = await Promise.all(sourceBackfills);
         const filled = result.reduce((sum, r) => sum + r.filled, 0);
         const failed = result.reduce((sum, r) => sum + r.failed, 0);
         const rateLimited = result.reduce((sum, r) => sum + r.rateLimited, 0);

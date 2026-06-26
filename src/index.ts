@@ -67,14 +67,21 @@ function getEnabledTrackers(): Tracker[] {
                     );
                     break;
                 case OIService.name:
-                    services.push(
-                        new OIService(
-                            telegram,
-                            [{ chatId: config.telegram.oiChatID }],
-                            [{ chatId: config.telegram.hlOIChatID }],
-                            config.oi.screenshotEnabled
-                        )
-                    );
+                    if (OIService.validateSources(config.oi.sources)) {
+                        services.push(
+                            new OIService(
+                                telegram,
+                                config.oi.sources,
+                                [{ chatId: config.telegram.oiChatID }],
+                                [{ chatId: config.telegram.hlOIChatID }],
+                                config.oi.screenshotEnabled
+                            )
+                        );
+                    } else {
+                        throw new Error(
+                            `Invalid OI_SOURCES value: ${config.oi.sources}. Valid options: ${OIService.getValidSources().join(', ')}`
+                        );
+                    }
                     break;
                 default:
                     logger.warn(`Unknown tracker name: ${trackerConfig.fullName}`);

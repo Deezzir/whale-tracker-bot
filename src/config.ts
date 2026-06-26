@@ -257,6 +257,9 @@ export const config = {
         coinglassExchanges: parseCoinglassExchanges(
             process.env['COINGLASS_EXCHANGES'] || 'Gate,Bybit,Binance,OKX,Kraken'
         ),
+        sources: optionalEnv('OI_SOURCES', 'coinglass,hyperliquid')
+            .split(',')
+            .map((s) => s.trim()),
         refreshIntervalMs: parseInt(optionalEnv('COINGLASS_REFRESH_INTERVAL_MS', '3600000'), 10),
         coinglassGapThresholdIntervals: parseInt(optionalEnv('COINGLASS_GAP_THRESHOLD_INTERVALS', '3'), 10),
         screenshotEnabled: optionalEnv('OI_SCREENSHOT_ENABLED', 'true') === 'true',
